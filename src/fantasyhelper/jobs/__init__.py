@@ -1,0 +1,1 @@
+"""Jobs programados: captura diaria."""

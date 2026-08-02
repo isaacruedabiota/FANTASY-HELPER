@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fantasyhelper"
+version = "0.1.0"
+description = "Asistente de decisiones para juegos fantasy de futbol (Mister, y mas adelante otros)"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.27",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.2",
+    "typer>=0.12",
+    "rich>=13.7",
+    "python-dotenv>=1.0",
+    "apscheduler>=3.10",
+    "pandas>=2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+fh = "fantasyhelper.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+fantasyhelper = ["storage/*.sql"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+ignore = [
+    # Capturar Exception es deliberado en adapters y jobs: si FutbolFantasy
+    # cambia el HTML o Mister rompe un endpoint, se registra el error y se sigue
+    # con el resto de fuentes. Perder la captura entera del dia es peor que
+    # tragarse una excepcion, porque ese dia no se puede recuperar.
+    "BLE001",
+    # typer.Argument/Option en valores por defecto es el idioma de la libreria.
+    "B008",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
