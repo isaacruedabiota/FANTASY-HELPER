@@ -16,7 +16,7 @@ predecir subidas de valor, tendrás dos meses de datos con los que hacerlo.
 | Fase | Contenido | Estado |
 |---|---|---|
 | 0 | Modelo canónico, captura diaria, FutbolFantasy | **funcionando** |
-| 0b | Adapter de Mister (endpoints vía HAR) | esqueleto, pendiente de sesión |
+| 0b | Adapter de Mister: rutas y parsers verificados | **pendiente solo de la cookie de sesión** |
 | 1 | Consultas de mercado y plantilla por CLI | pendiente |
 | 2 | Puntos esperados + once óptimo + radar de cláusulas + web | pendiente |
 | 3 | Modelo de valor de mercado entrenado con el histórico propio | pendiente |
@@ -51,20 +51,31 @@ se ejecuta igualmente al arrancar (hay 6 horas de margen), así no se pierde el 
 
 ## Conectar Mister
 
-Mister no publica API, así que los endpoints se descubren leyendo el tráfico real del
-navegador en vez de adivinarlos:
+Mister **no tiene API JSON**. Su web app hace `POST` a estas rutas con la cabecera
+`X-Requested-With: XMLHttpRequest` y recibe fragmentos de HTML ya renderizado, que es lo
+que parseamos:
+
+| Ruta | Contenido |
+|---|---|
+| `/search` | catálogo de jugadores con valor de mercado (50 por página) |
+| `/team` | tu plantilla |
+| `/market` | el mercado del día de tu liga |
+| `/standings` | clasificación, puntos y valor de plantilla de cada rival |
+
+Las rutas ya vienen configuradas. Lo único que falta es la **sesión**:
 
 1. Entra en tu liga en <https://mister.mundodeportivo.com>.
-2. Abre DevTools (F12) → pestaña **Red**, recarga y navega por Mercado y Clasificación.
-3. Click derecho → **Guardar todo como HAR**.
-4. `fh mister har fichero.har`
+2. DevTools (F12) → pestaña **Red** → click en cualquier petición a
+   `mister.mundodeportivo.com` → **Cabeceras** → *Request Headers*.
+3. Copia el valor entero de `Cookie` y pégalo en `MISTER_TOKEN` en tu `.env`.
+4. Pon el ID de tu liga en `MISTER_LEAGUE_ID`.
 
-Eso detecta los endpoints, propone a qué corresponde cada uno, y extrae tu ID de liga y
-la cookie de sesión. Revisa `data/mister_endpoints.json` (incluye una muestra de cada
-respuesta para confirmar cuál es cuál) y copia la cookie a `MISTER_TOKEN` en `.env`.
+`fh mister har fichero.har` sigue sirviendo para redescubrir rutas si Mister las cambia,
+pero ojo: la opción de Chrome *"Guardar todo como HAR"* que sale por defecto **censura las
+cookies**, así que para la sesión hay que copiarla a mano como en el paso 2.
 
-> Un HAR contiene tus cookies de sesión: equivale a una contraseña. Se procesa en local
-> y `data/` está en `.gitignore`, pero no lo compartas.
+> Un HAR y una cookie de sesión equivalen a tu contraseña. Se procesan en local y `data/`
+> está en `.gitignore`, pero no los compartas.
 
 **No hace falta para empezar.** FutbolFantasy ya publica los valores de mercado de Mister
 y su variación diaria, así que el histórico de precios se captura sin sesión. Mister solo

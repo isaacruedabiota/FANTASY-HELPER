@@ -1,16 +1,11 @@
 """Registro de endpoints de Mister.
 
-Mister no publica API. Los endpoints se descubren exportando un HAR desde las
-DevTools del navegador (`fh mister har`) y se guardan en
-`data/mister_endpoints.json`, no en el codigo: cuando Mister cambie una ruta a
-mitad de temporada se arregla editando un JSON, sin tocar Python.
+Mister no tiene API JSON. Su web app hace POST a estas rutas con la cabecera
+`X-Requested-With: XMLHttpRequest` y recibe fragmentos de HTML renderizado.
+Las rutas estan confirmadas leyendo el trafico real del navegador (HAR).
 
-Claves que necesita el snapshot diario:
-    squad       -> mi plantilla (valor, clausula, precio de compra)
-    market      -> mercado del dia (jugadores y precios de salida)
-    standings   -> clasificacion de la liga y saldo de cada rival
-    teams       -> plantillas de los rivales (para el radar de clausulas)
-    players     -> catalogo de jugadores con su valor de mercado
+Se pueden sobreescribir desde `data/mister_endpoints.json` sin tocar codigo:
+el dia que Mister cambie una ruta a mitad de temporada, se edita el JSON.
 """
 
 from __future__ import annotations
@@ -26,15 +21,12 @@ log = logging.getLogger(__name__)
 
 ENDPOINTS_PATH = settings.data_dir / "mister_endpoints.json"
 
-#: Claves que el job de snapshot intentara capturar, en este orden.
-REQUIRED_KEYS = ("players", "market", "squad", "standings", "teams")
-
 
 @dataclass
 class Endpoint:
     key: str
     path: str
-    method: str = "GET"
+    method: str = "POST"
     params: dict[str, Any] = field(default_factory=dict)
     note: str = ""
 
@@ -48,15 +40,32 @@ class Endpoint:
         return path, params
 
 
+#: Rutas confirmadas contra el trafico real de la web app.
+DEFAULT_ENDPOINTS: dict[str, Endpoint] = {
+    # Catalogo completo de jugadores con su valor de mercado. Pagina de 50 en 50.
+    "search": Endpoint("search", "/search", note="catalogo de jugadores"),
+    # Mercado del dia de tu liga.
+    "market": Endpoint("market", "/market", note="mercado diario"),
+    # Tu plantilla.
+    "squad": Endpoint("squad", "/team", note="plantilla propia"),
+    # Clasificacion: rivales, puntos y valor de sus plantillas.
+    "standings": Endpoint("standings", "/standings", note="clasificacion de la liga"),
+}
+
+REQUIRED_KEYS = tuple(DEFAULT_ENDPOINTS)
+
+
 def load_endpoints() -> dict[str, Endpoint]:
-    """Lee los endpoints configurados. Devuelve {} si aun no se ha importado el HAR."""
-    if not ENDPOINTS_PATH.exists():
-        return {}
-    data = json.loads(ENDPOINTS_PATH.read_text(encoding="utf-8"))
-    return {
-        key: Endpoint(key=key, **spec)
-        for key, spec in data.get("endpoints", {}).items()
-    }
+    """Endpoints por defecto, con lo que haya en el JSON sobreescribiendo encima."""
+    endpoints = dict(DEFAULT_ENDPOINTS)
+
+    if ENDPOINTS_PATH.exists():
+        data = json.loads(ENDPOINTS_PATH.read_text(encoding="utf-8"))
+        for key, spec in data.get("endpoints", {}).items():
+            endpoints[key] = Endpoint(key=key, **spec)
+            log.debug("endpoint '%s' sobreescrito desde %s", key, ENDPOINTS_PATH.name)
+
+    return endpoints
 
 
 def save_endpoints(endpoints: dict[str, Endpoint], candidates: list[dict] | None = None) -> None:

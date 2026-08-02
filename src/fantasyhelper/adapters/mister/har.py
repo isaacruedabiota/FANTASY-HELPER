@@ -30,11 +30,10 @@ MISTER_HOSTS = ("mister.mundodeportivo.com", "mundodeportivo.com")
 # Pistas para adivinar que representa cada endpoint. Es solo una propuesta:
 # la confirmacion final la das tu mirando el JSON de muestra.
 KEY_HINTS: dict[str, tuple[str, ...]] = {
-    "players": ("player", "jugador", "catalog", "squadplayers"),
+    "search": ("search", "buscar", "players", "jugadores"),
     "market": ("market", "mercado", "offer", "puja", "bid"),
-    "squad": ("squad", "plantilla", "lineup", "alineacion", "myteam"),
-    "standings": ("standing", "ranking", "clasificacion", "classification", "leaderboard"),
-    "teams": ("teams", "equipos", "community", "rivals", "users"),
+    "squad": ("team", "squad", "plantilla", "lineup", "alineacion"),
+    "standings": ("standing", "ranking", "clasificacion", "classification"),
 }
 
 # Cookies que no son de sesion y solo ensucian.
@@ -82,8 +81,8 @@ def _guess_key(path: str, body: str | None) -> tuple[str | None, int]:
 
     for key, hints in KEY_HINTS.items():
         score = sum(10 for hint in hints if hint in haystack)
-        # Un JSON grande suele ser el catalogo de jugadores, no un ping.
-        if body and len(body) > 20_000 and key == "players":
+        # La respuesta mas grande suele ser el catalogo de jugadores, no un ping.
+        if body and len(body) > 20_000 and key == "search":
             score += 5
         if score > best[1]:
             best = (key, score)
@@ -115,9 +114,11 @@ def parse_har(har_path: Path) -> tuple[list[HarEntry], dict[str, str], list[str]
         content_type = content.get("mimeType", "") or ""
         body = _decode_body(content)
 
-        # Solo interesan respuestas de datos, no HTML, imagenes ni bundles JS.
-        is_json = "json" in content_type.lower() or (body or "").lstrip()[:1] in ("{", "[")
-        if not is_json:
+        # Mister responde fragmentos de HTML, no JSON. Nos quedamos con las
+        # respuestas de datos y descartamos imagenes, CSS y bundles JS.
+        lowered = content_type.lower()
+        is_data = "json" in lowered or "html" in lowered
+        if not is_data or not body:
             continue
 
         key, score = _guess_key(parsed.path, body)

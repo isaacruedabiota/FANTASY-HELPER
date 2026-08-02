@@ -43,8 +43,13 @@ class MisterClient:
             base_url=BASE_URL,
             headers={
                 "User-Agent": USER_AGENT,
-                "Accept": "application/json, text/plain, */*",
+                "Accept": "*/*",
                 "Accept-Language": "es-ES,es;q=0.9",
+                # Sin esto Mister devuelve la pagina completa en vez del
+                # fragmento; es lo que distingue una peticion de la web app.
+                "X-Requested-With": "XMLHttpRequest",
+                "Origin": BASE_URL,
+                "Referer": f"{BASE_URL}/",
             },
             timeout=httpx.Timeout(20.0),
             follow_redirects=True,
@@ -159,11 +164,11 @@ class MisterClient:
         conn: sqlite3.Connection,
         endpoint: Endpoint,
         **values: Any,
-    ) -> Any:
-        """Pide un endpoint, guarda el crudo y devuelve el JSON parseado.
+    ) -> bytes:
+        """Pide un endpoint, guarda el crudo y devuelve el HTML.
 
         El orden importa: primero se persiste la respuesta, luego se parsea. Si
-        el parseo revienta porque Mister cambio el formato, el dato del dia ya
+        el parseo revienta porque Mister cambio el maquetado, el dato del dia ya
         esta a salvo y se puede reprocesar.
         """
         path, params = endpoint.resolve(**values)
@@ -179,11 +184,17 @@ class MisterClient:
             content_type=response.headers.get("Content-Type"),
         )
 
-        try:
-            return response.json()
-        except (json.JSONDecodeError, ValueError):
-            log.warning("respuesta no-JSON en %s (guardada en crudo)", endpoint.key)
-            return None
+        # Si la sesion caduca, Mister responde 200 con la pantalla de login en
+        # vez de un error, asi que hay que detectarlo por el contenido.
+        body = response.content
+        if b'id="partial-content"' not in body and b"player-row" not in body:
+            if b"login" in body.lower()[:4000]:
+                raise NotConfiguredError(
+                    f"Mister devolvio la pantalla de login en {path}: la sesion ha "
+                    "caducado. Copia de nuevo la cookie a MISTER_TOKEN en .env."
+                )
+            log.warning("respuesta inesperada en %s (guardada en crudo)", endpoint.key)
+        return body
 
     def close(self) -> None:
         self._client.close()

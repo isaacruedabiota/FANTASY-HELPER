@@ -203,6 +203,17 @@ def mister_har(
             "Copiala a MISTER_TOKEN en .env:"
         )
         console.print(f"[dim]{cookie_header[:200]}{'...' if len(cookie_header) > 200 else ''}[/dim]")
+    else:
+        # Chrome ofrece dos exportaciones y la que censura cookies es la que
+        # sale por defecto, asi que este caso es el habitual, no un error raro.
+        console.print(
+            "\n[yellow]El HAR no incluye cookies[/yellow] (exportacion saneada de Chrome). "
+            "Sin sesion no se puede capturar tu liga. Para conseguirla:\n"
+            "  DevTools > pestaña Red > click en una peticion a "
+            "mister.mundodeportivo.com >\n"
+            "  Cabeceras > Request Headers > copia el valor entero de [bold]Cookie[/bold]\n"
+            "  y pegalo en [bold]MISTER_TOKEN[/bold] en tu .env"
+        )
     console.print(
         "\nRevisa [bold]data/mister_endpoints.json[/bold]: la seccion 'candidates' "
         "incluye una muestra de cada respuesta para confirmar cual es cual."
