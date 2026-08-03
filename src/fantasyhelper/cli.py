@@ -220,6 +220,112 @@ def mister_har(
     )
 
 
+@mister_app.command("sesion")
+def mister_sesion(
+    fichero: Path = typer.Argument(
+        None,
+        help="Fichero con el comando cURL. Si se omite, se lee del portapapeles.",
+    ),
+) -> None:
+    """Configura la sesion de Mister a partir de un cURL copiado del navegador.
+
+    En Brave/Chrome: DevTools (F12) > pestaña Red > click derecho sobre una
+    peticion a mister.mundodeportivo.com > Copiar > Copiar como cURL.
+    Luego ejecuta este comando (sin argumentos si lo tienes en el portapapeles).
+    """
+    from fantasyhelper.adapters.mister.curl import (
+        cookie_header,
+        extract_cookies,
+        update_env_token,
+    )
+    from fantasyhelper.config import PROJECT_ROOT
+
+    if fichero:
+        texto = fichero.read_text(encoding="utf-8", errors="replace")
+    else:
+        texto = _leer_portapapeles()
+        if not texto:
+            console.print(
+                "[red]No se pudo leer el portapapeles.[/red] Pega el cURL en un fichero "
+                "y ejecuta: [bold]fh mister sesion fichero.txt[/bold]"
+            )
+            raise typer.Exit(1)
+
+    cookies = extract_cookies(texto)
+    if not cookies:
+        console.print(
+            "[red]No se encontro ninguna cookie en el cURL.[/red]\n"
+            "Asegurate de haber copiado con [bold]Copiar como cURL[/bold] una peticion "
+            "a mister.mundodeportivo.com estando con la sesion iniciada."
+        )
+        raise typer.Exit(1)
+
+    token = cookie_header(cookies)
+    reemplazada = update_env_token(PROJECT_ROOT / ".env", token)
+
+    console.print(f"[green]{len(cookies)} cookies de sesion extraidas:[/green] "
+                  f"{', '.join(cookies)}")
+    console.print(
+        f"MISTER_TOKEN {'actualizado' if reemplazada else 'anadido'} en .env"
+    )
+    console.print("\nComprobando que la sesion funciona...")
+
+    # Probar de verdad: una cookie mal copiada da un 200 con pantalla de login,
+    # asi que no vale con guardarla y suponer.
+    from fantasyhelper.adapters.mister.client import MisterClient
+    from fantasyhelper.adapters.mister.endpoints import load_endpoints
+    from fantasyhelper.adapters.mister.parsers import parse_standings
+
+    conn = connect()
+    try:
+        client = MisterClient()
+        # settings se leyo al importar, antes de escribir el .env: aplicamos el
+        # token recien extraido en vez de confiar en lo que hay en memoria.
+        client.apply_token(token)
+        html = client.fetch(conn, load_endpoints()["standings"])
+        managers = parse_standings(html)
+    except Exception as exc:
+        console.print(f"[red]La sesion no funciona:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    finally:
+        conn.close()
+
+    if not managers:
+        console.print(
+            "[yellow]La peticion funciono pero no se leyo ninguna clasificacion.[/yellow] "
+            "Revisa data/ para ver el HTML devuelto."
+        )
+        raise typer.Exit(1)
+
+    client.save_session()
+    console.print(f"[green]Sesion valida.[/green] Liga con {len(managers)} participantes:")
+    for manager in managers[:5]:
+        console.print(
+            f"  {manager.position or '?':>2}. {manager.name:<24} "
+            f"{manager.points or 0:>4} pts   plantilla {manager.team_value or 0:,} €".replace(
+                ",", "."
+            )
+        )
+    console.print("\nYa puedes ejecutar [bold]fh capturar[/bold].")
+
+
+def _leer_portapapeles() -> str | None:
+    """Lee el portapapeles de Windows sin dependencias externas."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout if result.returncode == 0 and result.stdout.strip() else None
+
+
 @mister_app.command("endpoints")
 def mister_endpoints() -> None:
     """Muestra los endpoints de Mister configurados y los que faltan."""

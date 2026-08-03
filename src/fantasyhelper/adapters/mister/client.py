@@ -70,9 +70,9 @@ class MisterClient:
 
         # El token de .env manda sobre lo guardado.
         if settings.mister_token:
-            self._apply_token(settings.mister_token)
+            self.apply_token(settings.mister_token)
 
-    def _apply_token(self, token: str) -> None:
+    def apply_token(self, token: str) -> None:
         """Acepta tanto un bearer token como una cookie completa ('a=1; b=2')."""
         if "=" in token and ";" in token or token.count("=") > 1:
             for part in token.split(";"):

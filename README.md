@@ -65,10 +65,16 @@ que parseamos:
 Las rutas ya vienen configuradas. Lo único que falta es la **sesión**:
 
 1. Entra en tu liga en <https://mister.mundodeportivo.com>.
-2. DevTools (F12) → pestaña **Red** → click en cualquier petición a
-   `mister.mundodeportivo.com` → **Cabeceras** → *Request Headers*.
-3. Copia el valor entero de `Cookie` y pégalo en `MISTER_TOKEN` en tu `.env`.
-4. Pon el ID de tu liga en `MISTER_LEAGUE_ID`.
+2. DevTools (F12) → pestaña **Red** → recarga (F5).
+3. Click derecho sobre una petición a `mister.mundodeportivo.com` (por ejemplo
+   `standings` o `team`) → **Copiar** → **Copiar como cURL**.
+4. `fh mister sesion`
+
+El comando lee el cURL del portapapeles, extrae la cookie descartando las de analítica,
+la escribe en `.env` y **comprueba contra el servidor que funciona** antes de darla por
+buena — una cookie mal copiada devuelve un 200 con la pantalla de login, así que guardarla
+sin verificar no sirve de nada. Si prefieres pegar el cURL en un fichero:
+`fh mister sesion fichero.txt`.
 
 `fh mister har fichero.har` sigue sirviendo para redescubrir rutas si Mister las cambia,
 pero ojo: la opción de Chrome *"Guardar todo como HAR"* que sale por defecto **censura las
