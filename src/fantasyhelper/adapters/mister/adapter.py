@@ -63,6 +63,9 @@ class MisterAdapter:
             provider=self.provider,
             external_id=player.external_id,
             name=player.name,
+            # El slug del enlace es lo unico que permite cruzar con las otras
+            # fuentes: el nombre visible viene abreviado ("A. Sivera").
+            slug=player.slug,
             team_id=team_id,
             position=player.position,
         )
@@ -157,27 +160,20 @@ class MisterAdapter:
     def snapshot(self, conn: sqlite3.Connection) -> int:
         self.login()
 
-        league_id = None
-        if settings.mister_league_id:
-            league_id = repo.upsert_league(
-                conn,
-                provider=self.provider,
-                external_id=settings.mister_league_id,
-                name=f"Liga {settings.mister_league_id}",
-                season=settings.season,
-            )
-        else:
-            log.warning(
-                "MISTER_LEAGUE_ID sin configurar: se capturaran valores de mercado "
-                "pero no plantillas, mercado ni clasificacion."
-            )
+        # Las rutas de Mister no llevan el id de liga: la sesion (via x-auth)
+        # determina de que liga se recibe todo. MISTER_LEAGUE_ID es solo una
+        # etiqueta para el historico, asi que si falta no se bloquea nada.
+        external_id = settings.mister_league_id or "default"
+        league_id = repo.upsert_league(
+            conn,
+            provider=self.provider,
+            external_id=external_id,
+            name=f"Liga {external_id}",
+            season=settings.season,
+        )
 
         total = 0
         for key, endpoint in self.endpoints.items():
-            # Todo salvo el catalogo depende de saber en que liga estamos.
-            if key != "search" and league_id is None:
-                continue
-
             try:
                 html = self.client.fetch(conn, endpoint)
             except Exception as exc:

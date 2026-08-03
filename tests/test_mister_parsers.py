@@ -59,6 +59,25 @@ def test_catalogo_de_busqueda(mister_search_html):
     assert mbappe.team_external_id == "15"
 
 
+def test_el_slug_del_enlace_es_el_nombre_completo(mister_team_html):
+    """El slug es lo que permite cruzar con FutbolFantasy.
+
+    Mister muestra "A. Sivera" pero enlaza a players/7893/antonio-sivera. Sin el
+    slug, ese jugador no se encontraria nunca con el de la otra fuente.
+    """
+    players = parse_players(mister_team_html)
+    sivera = next(p for p in players if p.external_id == "7893")
+    assert sivera.slug == "antonio-sivera"
+    assert sivera.name == "A. Sivera"
+
+
+def test_los_emojis_no_ensucian_el_nombre(mister_team_html):
+    players = parse_players(mister_team_html)
+    assert any(p.slug == "alejandro-grimaldo" for p in players)
+    for player in players:
+        assert "💥" not in player.name
+
+
 def test_todos_los_jugadores_tienen_valor_y_posicion(mister_search_html):
     players = parse_players(mister_search_html)
     assert all(p.market_value for p in players)

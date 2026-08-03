@@ -51,6 +51,11 @@ CREATE TABLE IF NOT EXISTS player_alias (
     provider      TEXT NOT NULL,        -- 'mister' | 'futbolfantasy' | ...
     external_id   TEXT NOT NULL,
     external_name TEXT,
+    -- Equipo SEGUN ESTA FUENTE. Imprescindible tenerlo por fuente y no solo en
+    -- player.team_id: comparar el equipo que declara cada una para los mismos
+    -- jugadores es lo que permite deducir que el equipo 2 de Mister y el
+    -- 'atletico' de FutbolFantasy son el mismo.
+    team_id       INTEGER REFERENCES team(id),
     confidence    REAL NOT NULL DEFAULT 1.0,  -- <1.0 si el match fue difuso y hay que revisarlo
     UNIQUE (provider, external_id)
 );

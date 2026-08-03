@@ -300,6 +300,9 @@ class FutbolFantasyScraper:
                     conn, name=row.team_name, provider=self.provider, external_id=row.team_name
                 )
 
+            # El slug se deriva del nombre visible y NO de data-nombre: el slug
+            # que genera FutbolFantasy se come las iniciales acentuadas
+            # ('Álex Baena' -> 'lex-baena'), lo que impide cruzarlo con Mister.
             player_id = repo.resolve_player(
                 conn,
                 provider=self.provider,
@@ -361,7 +364,9 @@ class FutbolFantasyScraper:
                 html = self.fetch_html(
                     conn, TEAM_PATH.format(slug=slug), f"equipo/{slug}"
                 )
-                rows = self.parse_players(html)
+                # El slug de la URL como nombre de equipo: es estable y legible,
+                # mejor que la abreviatura de tres letras que trae el HTML.
+                rows = self.parse_players(html, team_name=slug)
             except Exception as exc:
                 # Un equipo que falle no debe abortar la captura de los otros 19.
                 log.error("equipo '%s': %s", slug, exc)

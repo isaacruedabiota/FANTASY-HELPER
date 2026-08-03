@@ -102,6 +102,14 @@ Dos reglas que sostienen todo lo demás:
 1. **Los adapters no saben de análisis y el análisis no sabe de qué juego viene el dato.**
    Cada fuente traduce a las mismas tablas; las tablas `*_alias` hacen de crosswalk entre
    los identificadores de cada fuente. Añadir un fantasy nuevo es escribir un adapter.
+
+   El crosswalk es la pieza más delicada, porque cada fuente escribe los nombres a su
+   manera (`A. Grimaldo` / `Álex Grimaldo`, `pedri` / `pedri-gonzalez`). Se resuelve en
+   dos tiempos: primero por slug, y luego con una fase de reconciliación
+   ([reconcile.py](src/fantasyhelper/reconcile.py)) que deduce la equivalencia de equipos
+   a partir de los jugadores ya cruzados y reintenta el resto por apellido e inicial
+   dentro del equipo. Los enlaces deducidos quedan marcados con confianza < 1 y se
+   revisan con `fh dudas`.
 2. **El crudo se guarda antes de parsear, siempre.** Si mañana cambia el formato de una
    fuente o se nos ocurre una métrica nueva, se reprocesa el histórico entero desde
    `raw_payload` en vez de haberlo perdido. Se guarda comprimido (~2 MB/día en vez de 21).

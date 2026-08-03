@@ -39,6 +39,7 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
 #: capturado (que es justo lo que no se puede recuperar).
 _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("raw_payload", "content_encoding", "TEXT NOT NULL DEFAULT 'identity'"),
+    ("player_alias", "team_id", "INTEGER REFERENCES team(id)"),
 )
 
 

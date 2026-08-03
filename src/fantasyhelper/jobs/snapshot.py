@@ -17,8 +17,9 @@ import sqlite3
 from fantasyhelper.adapters.futbolfantasy.scraper import FutbolFantasyScraper
 from fantasyhelper.adapters.mister.adapter import MisterAdapter
 from fantasyhelper.config import settings
+from fantasyhelper.reconcile import reconcile
 from fantasyhelper.storage import repository as repo
-from fantasyhelper.storage.db import connect
+from fantasyhelper.storage.db import connect, transaction
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +76,22 @@ def run_snapshot(
             except Exception as exc:
                 log.error("FutbolFantasy: %s", exc)
                 errors.append(f"futbolfantasy: {exc}")
+
+        # Al final y no por fuente: unificar equipos y jugadores necesita tener
+        # delante los datos de las dos fuentes a la vez.
+        if len(sources) > 1:
+            try:
+                with transaction(conn):
+                    report = reconcile(conn)
+                if report.teams_merged or report.players_linked:
+                    log.info(
+                        "reconciliacion: %d equipos fusionados, %d jugadores enlazados, "
+                        "%d sin cruzar",
+                        report.teams_merged, report.players_linked, report.still_unmatched,
+                    )
+            except Exception as exc:
+                log.error("reconciliacion: %s", exc)
+                errors.append(f"reconciliacion: {exc}")
 
         status = "error" if errors and total == 0 else "ok"
         repo.finish_job(

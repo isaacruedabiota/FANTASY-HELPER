@@ -21,14 +21,14 @@ class Settings:
     data_dir: Path
     log_level: str
 
-    mister_email: str | None
-    mister_password: str | None
     mister_token: str | None
+    mister_xauth: str | None
     mister_league_id: str | None
 
     @property
     def mister_configured(self) -> bool:
-        return bool(self.mister_token or (self.mister_email and self.mister_password))
+        # x-auth es tan obligatorio como la cookie: con una sola no autentica.
+        return bool(self.mister_token and self.mister_xauth)
 
 
 def _env(key: str) -> str | None:
@@ -44,9 +44,8 @@ def load_settings() -> Settings:
         db_path=db_path,
         data_dir=data_dir,
         log_level=_env("FH_LOG_LEVEL") or "INFO",
-        mister_email=_env("MISTER_EMAIL"),
-        mister_password=_env("MISTER_PASSWORD"),
         mister_token=_env("MISTER_TOKEN"),
+        mister_xauth=_env("MISTER_XAUTH"),
         mister_league_id=_env("MISTER_LEAGUE_ID"),
     )
 

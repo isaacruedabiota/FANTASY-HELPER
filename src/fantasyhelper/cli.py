@@ -126,6 +126,26 @@ def planificador() -> None:
 
 
 @app.command()
+def reconciliar() -> None:
+    """Unifica equipos y jugadores entre fuentes. Se ejecuta ya al capturar."""
+    from fantasyhelper.reconcile import reconcile
+    from fantasyhelper.storage.db import transaction
+
+    conn = connect()
+    try:
+        with transaction(conn):
+            report = reconcile(conn)
+    finally:
+        conn.close()
+
+    console.print(f"  equipos fusionados : {report.teams_merged}")
+    console.print(f"  jugadores enlazados: {report.players_linked}")
+    console.print(f"  siguen sin cruzar  : {report.still_unmatched}")
+    if report.players_linked:
+        console.print("\nRevisa los enlaces deducidos con [bold]fh dudas[/bold].")
+
+
+@app.command()
 def dudas() -> None:
     """Jugadores cuyo cruce entre fuentes no es seguro y conviene revisar."""
     conn = connect()
@@ -233,11 +253,7 @@ def mister_sesion(
     peticion a mister.mundodeportivo.com > Copiar > Copiar como cURL.
     Luego ejecuta este comando (sin argumentos si lo tienes en el portapapeles).
     """
-    from fantasyhelper.adapters.mister.curl import (
-        cookie_header,
-        extract_cookies,
-        update_env_token,
-    )
+    from fantasyhelper.adapters.mister.curl import extract_session, update_env_var
     from fantasyhelper.config import PROJECT_ROOT
 
     if fichero:
@@ -251,8 +267,8 @@ def mister_sesion(
             )
             raise typer.Exit(1)
 
-    cookies = extract_cookies(texto)
-    if not cookies:
+    sesion = extract_session(texto)
+    if not sesion.is_usable():
         console.print(
             "[red]No se encontro ninguna cookie en el cURL.[/red]\n"
             "Asegurate de haber copiado con [bold]Copiar como cURL[/bold] una peticion "
@@ -260,14 +276,26 @@ def mister_sesion(
         )
         raise typer.Exit(1)
 
-    token = cookie_header(cookies)
-    reemplazada = update_env_token(PROJECT_ROOT / ".env", token)
+    token = sesion.cookie_header
+    xauth = sesion.headers.get("x-auth")
 
-    console.print(f"[green]{len(cookies)} cookies de sesion extraidas:[/green] "
-                  f"{', '.join(cookies)}")
-    console.print(
-        f"MISTER_TOKEN {'actualizado' if reemplazada else 'anadido'} en .env"
-    )
+    env_path = PROJECT_ROOT / ".env"
+    update_env_var(env_path, "MISTER_TOKEN", token)
+    console.print(f"[green]{len(sesion.cookies)} cookies extraidas:[/green] "
+                  f"{', '.join(sesion.cookies)}")
+
+    if xauth:
+        update_env_var(env_path, "MISTER_XAUTH", xauth)
+        console.print("[green]Cabecera x-auth extraida.[/green]")
+    else:
+        console.print(
+            "[yellow]No se encontro la cabecera x-auth.[/yellow] Mister la exige: "
+            "copia el cURL de una peticion POST a /market, /team o /standings, "
+            "no de una imagen ni de un fichero estatico."
+        )
+        raise typer.Exit(1)
+
+    console.print("MISTER_TOKEN y MISTER_XAUTH escritos en .env")
     console.print("\nComprobando que la sesion funciona...")
 
     # Probar de verdad: una cookie mal copiada da un 200 con pantalla de login,
@@ -279,9 +307,10 @@ def mister_sesion(
     conn = connect()
     try:
         client = MisterClient()
-        # settings se leyo al importar, antes de escribir el .env: aplicamos el
-        # token recien extraido en vez de confiar en lo que hay en memoria.
+        # settings se leyo al importar, antes de escribir el .env: aplicamos lo
+        # recien extraido en vez de confiar en lo que hay en memoria.
         client.apply_token(token)
+        client.apply_xauth(xauth)
         html = client.fetch(conn, load_endpoints()["standings"])
         managers = parse_standings(html)
     except Exception as exc:

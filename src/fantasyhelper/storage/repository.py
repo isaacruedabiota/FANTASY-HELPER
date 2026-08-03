@@ -54,6 +54,7 @@ def resolve_player(
     name: str,
     team_id: int | None = None,
     position: str | None = None,
+    slug: str | None = None,
 ) -> int:
     """Devuelve el player_id canonico para un jugador de un proveedor.
 
@@ -63,6 +64,12 @@ def resolve_player(
       3. Nombre normalizado + mismo equipo -> match difuso, se marca con
          confidence 0.8 para poder revisarlo con `fh dudas`.
     Si nada encaja, se crea un jugador nuevo.
+
+    `slug` es la clave del cruce entre fuentes y conviene pasarlo siempre que
+    la fuente lo publique: Mister muestra los nombres abreviados ("A. Sivera")
+    pero da el slug completo en el enlace ("antonio-sivera"), que es el mismo
+    formato que usa FutbolFantasy. Derivar el slug del nombre mostrado haria
+    que las dos fuentes no se encontraran nunca.
     """
     external_id = str(external_id)
 
@@ -73,7 +80,7 @@ def resolve_player(
     if row:
         return row["player_id"]
 
-    slug = slugify(name)
+    slug = slug or slugify(name)
     confidence = 1.0
 
     row = conn.execute("SELECT id FROM player WHERE slug = ?", (slug,)).fetchone()
@@ -98,16 +105,22 @@ def resolve_player(
         )
         player_id = cur.lastrowid
     else:
+        # El equipo canonico lo fija la primera fuente que lo sepa y no se
+        # pisa despues: cada fuente usa sus propios identificadores de equipo,
+        # y el suyo queda guardado en su alias.
         conn.execute(
-            "UPDATE player SET team_id = COALESCE(?, team_id), "
-            "position = COALESCE(?, position), updated_at = ? WHERE id = ?",
+            "UPDATE player SET team_id = COALESCE(team_id, ?), "
+            "position = COALESCE(position, ?), updated_at = ? WHERE id = ?",
             (team_id, position, utcnow(), player_id),
         )
 
     conn.execute(
-        "INSERT INTO player_alias (player_id, provider, external_id, external_name, confidence) "
-        "VALUES (?, ?, ?, ?, ?) ON CONFLICT (provider, external_id) DO NOTHING",
-        (player_id, provider, external_id, name, confidence),
+        "INSERT INTO player_alias "
+        "  (player_id, provider, external_id, external_name, team_id, confidence) "
+        "VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT (provider, external_id) DO UPDATE SET "
+        "  team_id = COALESCE(excluded.team_id, player_alias.team_id)",
+        (player_id, provider, external_id, name, team_id, confidence),
     )
     return player_id
 

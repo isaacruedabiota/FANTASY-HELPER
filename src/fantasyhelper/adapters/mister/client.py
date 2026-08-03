@@ -45,11 +45,12 @@ class MisterClient:
                 "User-Agent": USER_AGENT,
                 "Accept": "*/*",
                 "Accept-Language": "es-ES,es;q=0.9",
-                # Sin esto Mister devuelve la pagina completa en vez del
-                # fragmento; es lo que distingue una peticion de la web app.
+                # Estas dos son las que hacen que Mister devuelva el fragmento
+                # de HTML en vez de la pagina entera.
                 "X-Requested-With": "XMLHttpRequest",
+                "Partial-Request": "true",
                 "Origin": BASE_URL,
-                "Referer": f"{BASE_URL}/",
+                "Referer": f"{BASE_URL}/feed",
             },
             timeout=httpx.Timeout(20.0),
             follow_redirects=True,
@@ -59,35 +60,56 @@ class MisterClient:
     # -- sesion ------------------------------------------------------------
 
     def _load_session(self) -> None:
-        """Restaura cookies y token de la ejecucion anterior."""
+        """Restaura cookies y cabeceras de autenticacion de la ejecucion anterior."""
         if self.session_path.exists():
             data = json.loads(self.session_path.read_text(encoding="utf-8"))
-            for name, value in data.get("cookies", {}).items():
-                self._client.cookies.set(name, value)
-            if token := data.get("token"):
-                self._client.headers["Authorization"] = f"Bearer {token}"
+            for cookie in data.get("cookies", []):
+                self._client.cookies.set(
+                    cookie["name"],
+                    cookie["value"],
+                    domain=cookie.get("domain", ""),
+                    path=cookie.get("path", "/"),
+                )
+            for name, value in data.get("headers", {}).items():
+                self._client.headers[name] = value
             log.debug("sesion restaurada de %s", self.session_path)
 
-        # El token de .env manda sobre lo guardado.
+        # Lo que haya en .env manda sobre lo guardado.
         if settings.mister_token:
             self.apply_token(settings.mister_token)
+        if settings.mister_xauth:
+            self.apply_xauth(settings.mister_xauth)
 
     def apply_token(self, token: str) -> None:
-        """Acepta tanto un bearer token como una cookie completa ('a=1; b=2')."""
-        if "=" in token and ";" in token or token.count("=") > 1:
-            for part in token.split(";"):
-                if "=" in part:
-                    name, _, value = part.strip().partition("=")
-                    self._client.cookies.set(name, value)
-        else:
-            self._client.headers["Authorization"] = f"Bearer {token}"
+        """Carga una cookie completa con el formato 'a=1; b=2'."""
+        for part in token.split(";"):
+            name, sep, value = part.strip().partition("=")
+            if sep and name:
+                self._client.cookies.set(name, value)
+
+    def apply_xauth(self, xauth: str) -> None:
+        """Cabecera x-auth, obligatoria: sin ella Mister rechaza la peticion."""
+        self._client.headers["X-Auth"] = xauth
 
     def save_session(self) -> None:
         self.session_path.parent.mkdir(parents=True, exist_ok=True)
-        auth = self._client.headers.get("Authorization", "")
+        # Se recorre el jar en vez de hacer dict(cookies): Mister emite la misma
+        # cookie ('token') para varios dominios y dict() revienta con duplicados.
         payload = {
-            "cookies": dict(self._client.cookies),
-            "token": auth.removeprefix("Bearer ").strip() or None,
+            "cookies": [
+                {
+                    "name": cookie.name,
+                    "value": cookie.value,
+                    "domain": cookie.domain,
+                    "path": cookie.path,
+                }
+                for cookie in self._client.cookies.jar
+            ],
+            "headers": {
+                name: value
+                for name, value in self._client.headers.items()
+                if name.lower() == "x-auth"
+            },
         }
         self.session_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         # Contiene credenciales de sesion: que no lo lea nadie mas.
@@ -100,18 +122,16 @@ class MisterClient:
         """Comprueba que hay sesion utilizable.
 
         Mister no expone un endpoint de login documentado, y adivinarlo seria
-        inventar. El flujo soportado es: inicias sesion en el navegador, copias
-        la cookie de sesion a MISTER_TOKEN en .env (o exportas un HAR) y el
-        cliente la reutiliza.
+        inventar. El flujo soportado es copiar la sesion del navegador con
+        `fh mister sesion`, que extrae cookie y x-auth de un comando cURL.
         """
-        if not (self._client.cookies or self._client.headers.get("Authorization")):
+        if not self._client.cookies or not self._client.headers.get("X-Auth"):
             raise NotConfiguredError(
-                "No hay sesion de Mister.\n"
+                "Falta la sesion de Mister (cookie y/o cabecera x-auth).\n"
                 "  1. Entra en https://mister.mundodeportivo.com con tu navegador\n"
-                "  2. DevTools (F12) > pestana Red > recarga > click derecho > "
-                "'Guardar todo como HAR'\n"
-                "  3. Ejecuta: fh mister har <fichero.har>\n"
-                "Eso rellena los endpoints y la cookie de sesion de una vez."
+                "  2. DevTools (F12) > pestana Red > recarga\n"
+                "  3. Click derecho en una peticion > Copiar > Copiar como cURL\n"
+                "  4. Ejecuta: fh mister sesion"
             )
         self.save_session()
 

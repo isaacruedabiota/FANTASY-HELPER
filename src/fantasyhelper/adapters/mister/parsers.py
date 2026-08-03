@@ -35,6 +35,10 @@ log = logging.getLogger(__name__)
 POSITION_MAP = {"1": "PT", "2": "DF", "3": "MC", "4": "DL"}
 
 PLAYER_HREF_RE = re.compile(r"players/(\d+)/([\w\-]+)")
+#: Mister pega emojis al nombre como distintivo ("A. Grimaldo💥").
+EMOJI_RE = re.compile(
+    "[\U0001f300-\U0001faff\U00002600-\U000027bf\U0001f000-\U0001f2ff️]+"
+)
 USER_HREF_RE = re.compile(r"users/(\d+)/([\w\-]+)")
 TEAM_LOGO_RE = re.compile(r"/teams/(\d+)\.png")
 #: "15 jugadores · € 25.054.000"
@@ -130,6 +134,7 @@ def parse_players(html: bytes | str) -> list[MisterPlayer]:
 
         name_node = row.select_one(".info .name")
         name = name_node.get_text(strip=True) if name_node else slug.replace("-", " ")
+        name = EMOJI_RE.sub("", name).strip()
 
         position = None
         if pos_node := row.select_one(".player-position[data-position]"):
