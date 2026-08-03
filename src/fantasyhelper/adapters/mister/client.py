@@ -26,6 +26,8 @@ from fantasyhelper.storage.raw import save_raw
 log = logging.getLogger(__name__)
 
 BASE_URL = "https://mister.mundodeportivo.com"
+#: API JSON interno de la web app. La unica via a las clausulas de rescision.
+AJAX_PATH = "/ajax/sw"
 SESSION_PATH = settings.data_dir / "mister_session.json"
 USER_AGENT = "FantasyHelper/0.1 (uso personal; contacto: isaacru04@gmail.com)"
 MIN_INTERVAL = 1.2  # segundos entre peticiones
@@ -149,6 +151,7 @@ class MisterClient:
         *,
         method: str = "GET",
         params: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
     ) -> httpx.Response:
         """Peticion con throttling y reintentos con backoff ante 429/5xx."""
         last_error: Exception | None = None
@@ -156,7 +159,7 @@ class MisterClient:
         for attempt in range(1, MAX_RETRIES + 1):
             self._throttle()
             try:
-                response = self._client.request(method, path, params=params)
+                response = self._client.request(method, path, params=params, data=data)
             except httpx.HTTPError as exc:
                 last_error = exc
                 log.warning("error de red en %s (intento %d): %s", path, attempt, exc)
@@ -215,6 +218,44 @@ class MisterClient:
                 )
             log.warning("respuesta inesperada en %s (guardada en crudo)", endpoint.key)
         return body
+
+    def fetch_json(
+        self,
+        conn: sqlite3.Connection,
+        resource: str,
+        *,
+        endpoint_key: str | None = None,
+        **form: Any,
+    ) -> dict[str, Any] | None:
+        """Llama al API JSON interno: POST /ajax/sw/<resource>.
+
+        Es el unico sitio de Mister que devuelve JSON en vez de HTML, y el unico
+        que publica las clausulas de rescision. El cuerpo va como formulario e
+        incluye siempre `post=<resource>`, que es lo que espera el servidor.
+        """
+        path = f"{AJAX_PATH}/{resource}"
+        payload = {"post": resource, **form}
+        response = self.request(path, method="POST", data=payload)
+
+        save_raw(
+            conn,
+            source=self.provider,
+            endpoint=endpoint_key or f"ajax/{resource}",
+            content=response.content,
+            params=payload,
+            status_code=response.status_code,
+            content_type=response.headers.get("Content-Type"),
+        )
+
+        try:
+            data = response.json()
+        except (json.JSONDecodeError, ValueError):
+            log.warning("respuesta no-JSON en %s (guardada en crudo)", path)
+            return None
+
+        if data.get("status") != "ok":
+            log.warning("%s devolvio status=%s", path, data.get("status"))
+        return data
 
     def close(self) -> None:
         self._client.close()

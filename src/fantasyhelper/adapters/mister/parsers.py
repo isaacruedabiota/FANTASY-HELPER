@@ -29,6 +29,8 @@ from dataclasses import dataclass
 
 from bs4 import BeautifulSoup, Tag
 
+from fantasyhelper.utils.names import slugify
+
 log = logging.getLogger(__name__)
 
 #: data-position en Mister -> codigo canonico.
@@ -58,6 +60,11 @@ class MisterPlayer:
     owner_id: str | None = None
     asking_price: int | None = None
     ends_at: str | None = None
+    #: Lo que cuesta arrebatarselo a su dueno. Solo lo da el API JSON.
+    clause_value: int | None = None
+    #: Blindaje activo: mientras dure, la clausula no se puede pagar.
+    clause_shield: int | None = None
+    bought_at: str | None = None
 
 
 @dataclass
@@ -175,6 +182,80 @@ def parse_players(html: bytes | str) -> list[MisterPlayer]:
             )
         )
     return players
+
+
+@dataclass
+class MisterSquad:
+    """Plantilla completa de un participante, con sus clausulas."""
+
+    manager: MisterManager
+    players: list[MisterPlayer]
+    league_external_id: str | None = None
+
+
+def parse_user_squad(payload: dict) -> MisterSquad:
+    """Convierte la respuesta de /ajax/sw/users en plantilla + clausulas.
+
+    Es la fuente del radar de clausulas: da, para cada jugador de un rival, lo
+    que costaria arrebatarselo y si esta blindado. Ademas trae el nombre
+    completo del jugador (el HTML solo da la abreviatura) y el id de la liga.
+    """
+    data = payload.get("data") or {}
+    info = data.get("userInfo") or {}
+    value = data.get("value") or {}
+
+    manager = MisterManager(
+        external_id=str(data.get("id", "")),
+        slug=str(info.get("name", "")).lower().replace(" ", "-"),
+        name=info.get("name") or str(data.get("id", "")),
+        team_value=_as_int(value.get("value")),
+    )
+
+    players: list[MisterPlayer] = []
+    for entry in data.get("team_now") or []:
+        external_id = entry.get("id")
+        name = entry.get("name")
+        if external_id is None or not name:
+            continue
+
+        clause = entry.get("clause") or {}
+        market = entry.get("market") or {}
+
+        players.append(
+            MisterPlayer(
+                external_id=str(external_id),
+                # El JSON no trae slug; se deriva del nombre completo, que aqui
+                # si viene entero ("Eric Puerto" y no "E. Puerto").
+                slug=slugify(name),
+                name=name,
+                position=POSITION_MAP.get(str(entry.get("position"))),
+                team_external_id=_str_or_none(entry.get("id_team")),
+                market_value=_as_int(entry.get("value")),
+                owner_id=_str_or_none(entry.get("id_uc")) or manager.external_id,
+                clause_value=_as_int(clause.get("value")),
+                clause_shield=_as_int(entry.get("shield")),
+                bought_at=entry.get("created"),
+                asking_price=_as_int(entry.get("price")) or _as_int(market.get("price")),
+            )
+        )
+
+    return MisterSquad(
+        manager=manager,
+        players=players,
+        league_external_id=_str_or_none(info.get("id_community")),
+    )
+
+
+def _as_int(value: object) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    return parse_money(str(value))
+
+
+def _str_or_none(value: object) -> str | None:
+    return None if value in (None, "", 0) else str(value)
 
 
 def parse_standings(html: bytes | str) -> list[MisterManager]:

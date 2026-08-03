@@ -22,10 +22,12 @@ from fantasyhelper.adapters.mister.parsers import (
     MisterPlayer,
     parse_players,
     parse_standings,
+    parse_user_squad,
 )
 from fantasyhelper.config import settings
 from fantasyhelper.storage import repository as repo
 from fantasyhelper.storage.db import transaction
+from fantasyhelper.utils.names import slugify
 
 log = logging.getLogger(__name__)
 
@@ -136,6 +138,75 @@ class MisterAdapter:
             rows += 1
         return rows
 
+    def capture_squads(
+        self,
+        conn: sqlite3.Connection,
+        league_id: int,
+        preloaded: dict | None = None,
+    ) -> int:
+        """Recorre las plantillas de todos los participantes via API JSON.
+
+        Es la pieza que alimenta el radar de clausulas: de cada rival se obtiene
+        que jugadores tiene, que cuesta arrebatarselos y si estan blindados.
+        Una peticion por participante, no por jugador.
+
+        Los participantes se leen de la base de datos, asi que si entra gente
+        nueva en la liga aparece sola en la siguiente captura.
+        """
+        managers = conn.execute(
+            "SELECT id, external_id, name FROM manager WHERE league_id = ?",
+            (league_id,),
+        ).fetchall()
+
+        # La plantilla del primero ya se descargo al averiguar la liga.
+        preloaded_id = None
+        if preloaded:
+            preloaded_id = str((preloaded.get("data") or {}).get("id", ""))
+
+        rows = 0
+        for manager in managers:
+            if preloaded is not None and manager["external_id"] == preloaded_id:
+                payload = preloaded
+            else:
+                payload = self.client.fetch_json(
+                    conn,
+                    "users",
+                    endpoint_key=f"ajax/users/{manager['external_id']}",
+                    id=manager["external_id"],
+                    slug=slugify(manager["name"]),
+                    comments=0,
+                )
+            if not payload:
+                continue
+
+            squad = parse_user_squad(payload)
+            with transaction(conn):
+                for player in squad.players:
+                    player_id = self._player_id(conn, player)
+                    repo.record_ownership(
+                        conn,
+                        league_id=league_id,
+                        player_id=player_id,
+                        manager_id=manager["id"],
+                        clause_value=player.clause_value,
+                        buy_price=player.asking_price,
+                    )
+                    if player.market_value is not None:
+                        repo.record_player_value(
+                            conn, provider=self.provider, source=self.provider,
+                            player_id=player_id, market_value=player.market_value,
+                        )
+                    rows += 1
+
+                if squad.manager.team_value is not None:
+                    repo.record_manager_state(
+                        conn,
+                        manager_id=manager["id"],
+                        team_value=squad.manager.team_value,
+                    )
+            log.info("  plantilla de %-18s %d jugadores", manager["name"], len(squad.players))
+        return rows
+
     def _store_standings(
         self, conn: sqlite3.Connection, html: bytes, league_id: int
     ) -> int:
@@ -157,13 +228,42 @@ class MisterAdapter:
 
     # -- snapshot ----------------------------------------------------------
 
-    def snapshot(self, conn: sqlite3.Connection) -> int:
-        self.login()
+    def _resolve_league(
+        self, conn: sqlite3.Connection, standings_html: bytes | None
+    ) -> tuple[int, dict | None]:
+        """Averigua a que liga pertenece lo que estamos capturando.
 
-        # Las rutas de Mister no llevan el id de liga: la sesion (via x-auth)
-        # determina de que liga se recibe todo. MISTER_LEAGUE_ID es solo una
-        # etiqueta para el historico, asi que si falta no se bloquea nada.
-        external_id = settings.mister_league_id or "default"
+        Ninguna ruta de Mister lleva el id de liga: la sesion decide cual esta
+        activa. Pero el API JSON si lo publica como `userInfo.id_community`, y
+        eso importa porque un mismo usuario puede jugar varias ligas a la vez:
+        sin distinguirlas se mezclarian participantes de unas y otras.
+
+        Devuelve tambien el payload ya descargado del primer participante para
+        no tener que volver a pedirlo.
+        """
+        external_id = settings.mister_league_id
+        payload = None
+
+        managers = parse_standings(standings_html) if standings_html else []
+        if managers:
+            payload = self.client.fetch_json(
+                conn,
+                "users",
+                endpoint_key=f"ajax/users/{managers[0].external_id}",
+                id=managers[0].external_id,
+                slug=slugify(managers[0].name),
+                comments=0,
+            )
+            if payload and (detected := parse_user_squad(payload).league_external_id):
+                if external_id and external_id != detected:
+                    log.warning(
+                        "la liga activa en Mister (%s) no es la configurada en "
+                        "MISTER_LEAGUE_ID (%s); se usa la activa",
+                        detected, external_id,
+                    )
+                external_id = detected
+
+        external_id = external_id or "default"
         league_id = repo.upsert_league(
             conn,
             provider=self.provider,
@@ -171,15 +271,24 @@ class MisterAdapter:
             name=f"Liga {external_id}",
             season=settings.season,
         )
+        return league_id, payload
 
-        total = 0
+    def snapshot(self, conn: sqlite3.Connection) -> int:
+        self.login()
+
+        # Primero se descarga todo, y solo despues se decide bajo que liga se
+        # guarda: el id de liga solo se conoce tras consultar el API JSON.
+        pages: dict[str, bytes] = {}
         for key, endpoint in self.endpoints.items():
             try:
-                html = self.client.fetch(conn, endpoint)
+                pages[key] = self.client.fetch(conn, endpoint)
             except Exception as exc:
                 log.error("fallo capturando '%s': %s", key, exc)
-                continue
 
+        league_id, first_squad = self._resolve_league(conn, pages.get("standings"))
+
+        total = 0
+        for key, html in pages.items():
             try:
                 # El crudo ya esta guardado fuera de la transaccion, asi que un
                 # parser roto nunca pierde el dato del dia.
@@ -191,6 +300,13 @@ class MisterAdapter:
 
             log.info("%-10s -> %d filas", key, rows)
             total += rows
+
+        # Las plantillas van al final, cuando la clasificacion ya ha registrado
+        # a todos los participantes de los que hay que pedir la suya.
+        try:
+            total += self.capture_squads(conn, league_id, preloaded=first_squad)
+        except Exception as exc:
+            log.error("fallo capturando plantillas: %s", exc)
 
         return total
 
