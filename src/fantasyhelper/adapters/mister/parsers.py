@@ -29,7 +29,7 @@ from dataclasses import dataclass
 
 from bs4 import BeautifulSoup, Tag
 
-from fantasyhelper.utils.names import slugify
+from fantasyhelper.utils.names import slugify, strip_accents
 
 log = logging.getLogger(__name__)
 
@@ -244,6 +244,46 @@ def parse_user_squad(payload: dict) -> MisterSquad:
         players=players,
         league_external_id=_str_or_none(info.get("id_community")),
     )
+
+
+#: Mister escribe las fechas en castellano y abreviadas ('24 sept 2025').
+SPANISH_MONTHS = {
+    "ene": 1, "feb": 2, "mar": 3, "abr": 4, "may": 5, "jun": 6,
+    "jul": 7, "ago": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dic": 12,
+}
+VALUE_DATE_RE = re.compile(r"(\d{1,2})\s+([a-záéíóú]+)\.?\s+(\d{4})", re.IGNORECASE)
+
+
+def parse_spanish_date(text: str) -> str | None:
+    """'24 sept 2025' -> '2025-09-24'. Devuelve None si no encaja."""
+    match = VALUE_DATE_RE.search(strip_accents(text or "").lower())
+    if not match:
+        return None
+    day, month_name, year = match.groups()
+    month = SPANISH_MONTHS.get(month_name[:4]) or SPANISH_MONTHS.get(month_name[:3])
+    if not month:
+        log.debug("mes desconocido: %r", month_name)
+        return None
+    return f"{int(year):04d}-{month:02d}-{int(day):02d}"
+
+
+def parse_value_history(payload: dict) -> list[tuple[str, int]]:
+    """Extrae el historico diario de valor de /ajax/sw/players.
+
+    Mister publica en `values_chart` alrededor de un ano de valores diarios por
+    jugador. Es la unica parte del historico que se puede recuperar hacia atras:
+    clausulas, propiedad y probabilidades de once solo existen si se capturaron
+    el dia que ocurrieron.
+    """
+    chart = ((payload.get("data") or {}).get("values_chart") or {})
+    history: list[tuple[str, int]] = []
+
+    for point in chart.get("points") or []:
+        value = _as_int(point.get("value"))
+        date = parse_spanish_date(str(point.get("date", "")))
+        if value is not None and date:
+            history.append((date, value))
+    return history
 
 
 def _as_int(value: object) -> int | None:

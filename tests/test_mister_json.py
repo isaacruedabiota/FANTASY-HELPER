@@ -8,7 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from fantasyhelper.adapters.mister.parsers import parse_user_squad
+from fantasyhelper.adapters.mister.parsers import (
+    parse_spanish_date,
+    parse_user_squad,
+    parse_value_history,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -73,3 +77,40 @@ def test_payload_vacio_no_revienta():
     squad = parse_user_squad({"status": "ok", "data": {}})
     assert squad.players == []
     assert squad.league_external_id is None
+
+
+# --- historico de valor de mercado ---------------------------------------
+
+@pytest.fixture
+def players_payload() -> dict:
+    with gzip.open(FIXTURES / "mister_ajax_players.json.gz", "rt", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def test_parse_spanish_date():
+    assert parse_spanish_date("3 ago 2025") == "2025-08-03"
+    # 'sept' con cuatro letras es el caso que rompe un mapeo de tres.
+    assert parse_spanish_date("24 sept 2025") == "2025-09-24"
+    assert parse_spanish_date("10 mar 2026") == "2026-03-10"
+    assert parse_spanish_date("1 ene 2026") == "2026-01-01"
+    assert parse_spanish_date("no es una fecha") is None
+    assert parse_spanish_date("") is None
+
+
+def test_historico_de_valor_completo(players_payload):
+    history = parse_value_history(players_payload)
+    assert len(history) > 300, "Mister publica alrededor de un ano de valores diarios"
+
+    fechas = [d for d, _ in history]
+    assert fechas == sorted(fechas), "deben venir en orden cronologico"
+    assert all(v > 0 for _, v in history)
+
+
+def test_primer_punto_del_historico_verificado(players_payload):
+    history = parse_value_history(players_payload)
+    assert history[0] == ("2025-08-03", 6_118_000)
+
+
+def test_historico_sin_datos_devuelve_lista_vacia():
+    assert parse_value_history({"data": {}}) == []
+    assert parse_value_history({"data": {"values_chart": {"points": []}}}) == []

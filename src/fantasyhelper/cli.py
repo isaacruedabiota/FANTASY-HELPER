@@ -355,6 +355,41 @@ def _leer_portapapeles() -> str | None:
     return result.stdout if result.returncode == 0 and result.stdout.strip() else None
 
 
+@mister_app.command("historico")
+def mister_historico(
+    limite: int = typer.Option(None, help="Procesar solo N jugadores (para probar)."),
+    rehacer: bool = typer.Option(
+        False, "--rehacer", help="Reprocesar tambien los que ya tienen historico."
+    ),
+) -> None:
+    """Descarga el historico de valor de mercado que Mister publica por jugador.
+
+    Se ejecuta una sola vez: son unos 12 meses de valores diarios por jugador y
+    una peticion por cada uno. Es reanudable, asi que se puede cortar con Ctrl+C
+    y relanzar sin perder lo hecho.
+    """
+    from fantasyhelper.adapters.mister.adapter import MisterAdapter
+
+    conn = connect()
+    adapter = MisterAdapter()
+    try:
+        adapter.login()
+        procesados, filas = adapter.backfill_values(
+            conn, limit=limite, skip_done=not rehacer
+        )
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrumpido.[/yellow] Relanza el comando para continuar.")
+        raise typer.Exit(130) from None
+    finally:
+        adapter.client.close()
+        conn.close()
+
+    console.print(
+        f"\n[green]Historico descargado:[/green] {procesados} jugadores, "
+        f"{filas:,} valores diarios.".replace(",", ".")
+    )
+
+
 @mister_app.command("endpoints")
 def mister_endpoints() -> None:
     """Muestra los endpoints de Mister configurados y los que faltan."""

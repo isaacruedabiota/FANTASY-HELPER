@@ -23,6 +23,7 @@ from fantasyhelper.adapters.mister.parsers import (
     parse_players,
     parse_standings,
     parse_user_squad,
+    parse_value_history,
 )
 from fantasyhelper.config import settings
 from fantasyhelper.storage import repository as repo
@@ -206,6 +207,75 @@ class MisterAdapter:
                     )
             log.info("  plantilla de %-18s %d jugadores", manager["name"], len(squad.players))
         return rows
+
+    def backfill_values(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        limit: int | None = None,
+        skip_done: bool = True,
+    ) -> tuple[int, int]:
+        """Recupera el historico de valor de mercado que publica Mister.
+
+        Una peticion por jugador, asi que es lento y se ejecuta una sola vez.
+        Es reanudable: por defecto salta a los que ya tienen historico, de modo
+        que si se corta a la mitad basta con volver a lanzarlo.
+
+        Devuelve (jugadores procesados, filas escritas).
+        """
+        # Solo se puede pedir el historico de jugadores de los que conocemos su
+        # id en Mister, que son los que han aparecido en catalogo, mercado o
+        # alguna plantilla.
+        sql = """
+            SELECT a.external_id, a.player_id, p.name
+            FROM player_alias a
+            JOIN player p ON p.id = a.player_id
+            WHERE a.provider = 'mister'
+        """
+        if skip_done:
+            # "Ya tiene historico" = tiene valores de dias anteriores a hoy.
+            sql += """
+              AND NOT EXISTS (
+                SELECT 1 FROM player_value_snapshot v
+                WHERE v.player_id = a.player_id AND v.provider = 'mister'
+                  AND v.snapshot_date < date('now'))
+            """
+        sql += " ORDER BY p.name"
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+
+        targets = conn.execute(sql).fetchall()
+        log.info("historico pendiente para %d jugadores", len(targets))
+
+        processed = rows = 0
+        for target in targets:
+            payload = self.client.fetch_json(
+                conn,
+                "players",
+                endpoint_key=f"ajax/players/{target['external_id']}",
+                id=target["external_id"],
+                slug=slugify(target["name"]),
+                comments=0,
+            )
+            if not payload:
+                continue
+
+            history = parse_value_history(payload)
+            with transaction(conn):
+                for date, value in history:
+                    repo.record_player_value(
+                        conn,
+                        provider=self.provider,
+                        source=self.provider,
+                        player_id=target["player_id"],
+                        market_value=value,
+                        snapshot_date=date,
+                    )
+            processed += 1
+            rows += len(history)
+            log.info("  %-26s %d dias de historico", target["name"][:26], len(history))
+
+        return processed, rows
 
     def _store_standings(
         self, conn: sqlite3.Connection, html: bytes, league_id: int

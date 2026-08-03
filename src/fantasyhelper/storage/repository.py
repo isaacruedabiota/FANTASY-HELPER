@@ -176,8 +176,13 @@ def record_player_value(
     market_value: int,
     delta_1d: int | None = None,
     source: str | None = None,
+    snapshot_date: str | None = None,
 ) -> None:
-    """`provider` = de quien es el valor; `source` = de donde lo hemos leido."""
+    """`provider` = de quien es el valor; `source` = de donde lo hemos leido.
+
+    `snapshot_date` permite escribir valores de dias pasados, que es como entra
+    el historico que publica Mister. Por defecto, hoy.
+    """
     conn.execute(
         """
         INSERT INTO player_value_snapshot
@@ -188,7 +193,10 @@ def record_player_value(
             market_value = excluded.market_value,
             delta_1d = COALESCE(excluded.delta_1d, player_value_snapshot.delta_1d)
         """,
-        (today(), utcnow(), provider, source or provider, player_id, market_value, delta_1d),
+        (
+            snapshot_date or today(), utcnow(), provider, source or provider,
+            player_id, market_value, delta_1d,
+        ),
     )
 
 

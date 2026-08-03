@@ -6,21 +6,29 @@ diseñado para conectar más juegos después sin reescribir el análisis.
 
 ## La idea central
 
-El histórico de valores de mercado, cláusulas y probabilidades de alineación **no se
-puede reconstruir a posteriori**. O se captura cada día, o se pierde. Por eso lo primero
-que se ha construido no es el análisis sino el recolector: cuando en octubre quieras
-predecir subidas de valor, tendrás dos meses de datos con los que hacerlo.
+Las cláusulas, la propiedad de cada jugador y las probabilidades de alineación **no se
+pueden reconstruir a posteriori**: solo existen si se capturaron el día que ocurrieron.
+Por eso lo primero que se construyó no fue el análisis sino el recolector.
+
+Matiz importante que apareció al reversear Mister: el **valor de mercado sí es
+recuperable**, porque Mister publica alrededor de un año de valores diarios por jugador
+(`fh mister historico`). Eso permite entrenar la predicción de subidas y bajadas desde el
+primer día, sin esperar a acumular histórico propio.
 
 ## Estado
 
 | Fase | Contenido | Estado |
 |---|---|---|
 | 0 | Modelo canónico, captura diaria, FutbolFantasy | **funcionando** |
-| 0b | Adapter de Mister: rutas y parsers verificados | **pendiente solo de la cookie de sesión** |
+| 0b | Adapter de Mister: HTML + API JSON, con cláusulas | **funcionando** |
+| 0c | Backfill del histórico de valores | **funcionando** |
 | 1 | Consultas de mercado y plantilla por CLI | pendiente |
 | 2 | Puntos esperados + once óptimo + radar de cláusulas + web | pendiente |
-| 3 | Modelo de valor de mercado entrenado con el histórico propio | pendiente |
+| 3 | Modelo de valor de mercado entrenado con el histórico | pendiente |
 | 4 | Segundo adapter (Biwenger / LaLiga Fantasy) | pendiente |
+
+Limitaciones conocidas: `/search` solo devuelve los primeros 50 jugadores del catálogo, y
+Mister no publica el saldo de los rivales (habrá que estimarlo siguiendo el mercado).
 
 ## Instalación
 
@@ -42,7 +50,10 @@ fh estado
 fh capturar          # captura de hoy (Mister + FutbolFantasy)
 fh estado            # cuántos días de histórico llevas y si falta alguno
 fh dudas             # jugadores cuyo cruce entre fuentes no es seguro
+fh reconciliar       # unifica equipos y jugadores entre fuentes (ya va en capturar)
 fh planificador      # deja la captura automática corriendo
+
+fh mister historico  # una sola vez: ~1 año de valores diarios por jugador
 ```
 
 Para que capture solo, sin tener una terminal abierta, registra `fh planificador` como
@@ -51,16 +62,22 @@ se ejecuta igualmente al arrancar (hay 6 horas de margen), así no se pierde el 
 
 ## Conectar Mister
 
-Mister **no tiene API JSON**. Su web app hace `POST` a estas rutas con la cabecera
-`X-Requested-With: XMLHttpRequest` y recibe fragmentos de HTML ya renderizado, que es lo
-que parseamos:
+Mister tiene dos interfaces, ninguna documentada. Las páginas devuelven **fragmentos de
+HTML** ante un `POST` con la cabecera `X-Requested-With: XMLHttpRequest`, y los popups
+usan un **API JSON interno** en `/ajax/sw/*` que es donde está lo verdaderamente valioso:
 
-| Ruta | Contenido |
-|---|---|
-| `/search` | catálogo de jugadores con valor de mercado (50 por página) |
-| `/team` | tu plantilla |
-| `/market` | el mercado del día de tu liga |
-| `/standings` | clasificación, puntos y valor de plantilla de cada rival |
+| Ruta | Formato | Contenido |
+|---|---|---|
+| `/search` | HTML | catálogo de jugadores con valor (50 por página) |
+| `/team` | HTML | tu plantilla |
+| `/market` | HTML | el mercado del día de tu liga |
+| `/standings` | HTML | clasificación, puntos y valor de plantilla de cada rival |
+| `/ajax/sw/users` | JSON | plantilla completa de un participante **con las cláusulas**, blindajes, fecha de fichaje y el `id_community` de la liga |
+| `/ajax/sw/players` | JSON | ficha del jugador: cláusula, historial de puntos por temporada, próximo partido y **un año de valores diarios** |
+
+Ninguna ruta lleva el identificador de liga: lo decide la sesión. Se detecta solo a partir
+de `id_community`, que sí publica el API JSON — necesario si juegas más de una liga a la
+vez, porque si no se mezclarían los participantes de ambas.
 
 Las rutas ya vienen configuradas. Lo único que falta es la **sesión**:
 
