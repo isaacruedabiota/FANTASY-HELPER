@@ -94,6 +94,12 @@ class MisterAdapter:
     def _store_ownership(
         self, conn: sqlite3.Connection, players: list[MisterPlayer], league_id: int
     ) -> int:
+        """Guarda la propiedad de los jugadores de /team, que es MI plantilla.
+
+        Y por eso mismo sirve para identificarme: el dueno de esos jugadores soy
+        yo. Es la unica pista que da Mister sobre cual de los participantes es
+        el de la sesion.
+        """
         rows = 0
         for player in players:
             player_id = self._player_id(conn, player)
@@ -101,7 +107,7 @@ class MisterAdapter:
             if player.owner_id:
                 manager_id = repo.upsert_manager(
                     conn, league_id=league_id, external_id=player.owner_id,
-                    name=player.owner_id,
+                    name=player.owner_id, is_me=True,
                 )
             repo.record_ownership(
                 conn, league_id=league_id, player_id=player_id, manager_id=manager_id

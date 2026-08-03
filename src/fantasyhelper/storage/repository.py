@@ -285,12 +285,15 @@ def record_manager_state(
         INSERT INTO manager_snapshot
             (snapshot_date, captured_at, manager_id, balance, team_value, points, position)
         VALUES (?, ?, ?, ?, ?, ?, ?)
+        -- COALESCE y no asignacion directa: el estado de un participante se
+        -- escribe en dos pasos (la clasificacion da puntos y posicion, la
+        -- plantilla da el valor). Sin esto, el segundo borraria lo del primero.
         ON CONFLICT (snapshot_date, manager_id) DO UPDATE SET
             captured_at = excluded.captured_at,
-            balance = excluded.balance,
-            team_value = excluded.team_value,
-            points = excluded.points,
-            position = excluded.position
+            balance = COALESCE(excluded.balance, manager_snapshot.balance),
+            team_value = COALESCE(excluded.team_value, manager_snapshot.team_value),
+            points = COALESCE(excluded.points, manager_snapshot.points),
+            position = COALESCE(excluded.position, manager_snapshot.position)
         """,
         (today(), utcnow(), manager_id, balance, team_value, points, position),
     )

@@ -22,7 +22,7 @@ primer día, sin esperar a acumular histórico propio.
 | 0 | Modelo canónico, captura diaria, FutbolFantasy | **funcionando** |
 | 0b | Adapter de Mister: HTML + API JSON, con cláusulas | **funcionando** |
 | 0c | Backfill del histórico de valores | **funcionando** |
-| 1 | Consultas de mercado y plantilla por CLI | pendiente |
+| 1 | Consultas por CLI: plantilla, mercado, cláusulas, chollos, ficha | **funcionando** |
 | 2 | Puntos esperados + once óptimo + radar de cláusulas + web | pendiente |
 | 3 | Modelo de valor de mercado entrenado con el histórico | pendiente |
 | 4 | Segundo adapter (Biwenger / LaLiga Fantasy) | pendiente |
@@ -46,6 +46,21 @@ fh estado
 
 ## Uso diario
 
+### Consultas
+
+```bash
+fh plantilla             # tu plantilla: valor, cláusula, probabilidad, rival
+fh plantilla --de Skar   # la de un rival
+fh mercado               # el mercado de hoy, por probabilidad de ser titular
+fh clausulas             # radar de cláusulas + a quién te conviene blindar
+fh clausulas --saldo 3000000
+fh chollos               # libres y baratos que además van a jugar
+fh jugador pedri         # ficha con la evolución del valor
+fh liga                  # clasificación
+```
+
+### Mantenimiento
+
 ```bash
 fh capturar          # captura de hoy (Mister + FutbolFantasy)
 fh estado            # cuántos días de histórico llevas y si falta alguno
@@ -55,6 +70,13 @@ fh planificador      # deja la captura automática corriendo
 
 fh mister historico  # una sola vez: ~1 año de valores diarios por jugador
 ```
+
+El **coste ajustado** del radar de cláusulas es `cláusula / (probabilidad × jerarquía)`:
+prioriza pagar poco por alguien que va a jugar y que pesa en su equipo. No es todavía una
+predicción de puntos — eso llega en la Fase 2 — pero ya ordena por lo que importa. Los
+lesionados y sancionados quedan fuera, y a quien no tenemos dato de probabilidad se le
+supone una baja (0,2) en vez de una media: no saber si juega no es lo mismo que jugar a
+medias.
 
 Para que capture solo, sin tener una terminal abierta, registra `fh planificador` como
 tarea programada de Windows. Si el ordenador estuvo apagado a la hora prevista, el job

@@ -14,6 +14,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from fantasyhelper import display, queries
 from fantasyhelper.config import settings, setup_logging
 from fantasyhelper.storage.db import connect, init_db
 
@@ -123,6 +124,227 @@ def planificador() -> None:
     from fantasyhelper.jobs.scheduler import main as scheduler_main
 
     scheduler_main()
+
+
+# ---------------------------------------------------------------------------
+# Consultas
+# ---------------------------------------------------------------------------
+
+def _con_liga() -> tuple[object, object]:
+    """Conexion y participante propio, o aborta con un mensaje util."""
+    conn = connect()
+    me = queries.my_manager(conn)
+    if me is None:
+        conn.close()
+        console.print(
+            "[red]No se sabe cual de los participantes eres tu.[/red]\n"
+            "Ejecuta [bold]fh capturar --solo mister[/bold]: tu plantilla se "
+            "identifica al leer /team."
+        )
+        raise typer.Exit(1)
+    return conn, me
+
+
+@app.command()
+def plantilla(
+    de: str = typer.Option(None, help="Ver la plantilla de un rival por su nombre."),
+) -> None:
+    """Tu plantilla: valor, cláusula, probabilidad de jugar y próximo rival."""
+    conn, me = _con_liga()
+    try:
+        manager_id, titulo = me["id"], f"Plantilla de {me['name']}"
+        if de:
+            rival = conn.execute(
+                "SELECT id, name FROM manager WHERE name LIKE ? LIMIT 1", (f"%{de}%",)
+            ).fetchone()
+            if rival is None:
+                console.print(f"[red]No hay ningun participante que se parezca a '{de}'.[/red]")
+                raise typer.Exit(1)
+            manager_id, titulo = rival["id"], f"Plantilla de {rival['name']}"
+
+        rows = queries.squad(conn, manager_id)
+        if not rows:
+            console.print("[yellow]Sin datos de plantilla todavia.[/yellow]")
+            return
+
+        table = display.player_table(titulo, extra=("Clausula",))
+        for row in rows:
+            table.add_row(*display.player_row(row, display.money(row["clause_value"])))
+        console.print(table)
+
+        total = sum(r["market_value"] or 0 for r in rows)
+        clausulas = sum(r["clause_value"] or 0 for r in rows)
+        console.print(
+            f"\n  {len(rows)} jugadores · valor [bold]{display.money(total)}[/bold] · "
+            f"blindarlos todos costaria {display.money(clausulas)}"
+        )
+    finally:
+        conn.close()
+
+
+@app.command()
+def mercado() -> None:
+    """El mercado de hoy, ordenado por probabilidad de ser titular."""
+    conn = connect()
+    try:
+        rows = queries.market(conn)
+        if not rows:
+            console.print(
+                "[yellow]No hay mercado capturado.[/yellow] Ejecuta [bold]fh capturar[/bold]."
+            )
+            return
+
+        table = display.player_table("Mercado de hoy", extra=("Precio",))
+        for row in rows:
+            table.add_row(*display.player_row(row, display.money(row["asking_price"])))
+        console.print(table)
+    finally:
+        conn.close()
+
+
+@app.command()
+def clausulas(
+    saldo: int = typer.Option(None, help="Filtrar por lo que te puedes permitir (en euros)."),
+    minimo: float = typer.Option(0.6, help="Probabilidad minima de ser titular."),
+    limite: int = typer.Option(15, help="Cuantas filas mostrar."),
+) -> None:
+    """Radar de cláusulas: a quién sale más a cuenta arrebatarle un jugador.
+
+    Ordena por coste ajustado = cláusula / (probabilidad × jerarquía). Todavía no
+    es una predicción de puntos, pero ya prioriza pagar poco por alguien que va a
+    jugar y que pesa en su equipo.
+    """
+    conn, me = _con_liga()
+    try:
+        objetivos = queries.clause_targets(
+            conn, manager_id=me["id"], budget=saldo, min_probability=minimo
+        )
+        if not objetivos:
+            console.print("[yellow]Ningun objetivo cumple el filtro.[/yellow]")
+        else:
+            table = display.player_table(
+                "Objetivos: mejor relacion clausula / utilidad",
+                extra=("Dueno", "Clausula", "Coste aj."),
+            )
+            for row in objetivos[:limite]:
+                table.add_row(*display.player_row(
+                    row, row["owner"], display.money(row["clause_value"]),
+                    display.money(row["adjusted_cost"], short=True),
+                ))
+            console.print(table)
+
+        riesgo = queries.clause_risk(conn, me["id"])
+        if riesgo:
+            table = display.player_table(
+                "\nTuyos mas apetecibles: los primeros son los que hay que blindar",
+                extra=("Clausula", "Coste aj."),
+            )
+            for row in riesgo[:8]:
+                table.add_row(*display.player_row(
+                    row, display.money(row["clause_value"]),
+                    display.money(row["adjusted_cost"], short=True),
+                ))
+            console.print(table)
+    finally:
+        conn.close()
+
+
+@app.command()
+def chollos(
+    minimo: float = typer.Option(0.7, help="Probabilidad minima de ser titular."),
+    limite: int = typer.Option(20, help="Cuantas filas mostrar."),
+) -> None:
+    """Jugadores libres y baratos que además van a jugar."""
+    conn = connect()
+    try:
+        rows = queries.free_agents(conn, min_probability=minimo, limit=limite)
+        if not rows:
+            console.print("[yellow]Ningun jugador libre cumple el filtro.[/yellow]")
+            return
+        table = display.player_table(f"Libres con probabilidad >= {minimo:.0%}")
+        for row in rows:
+            table.add_row(*display.player_row(row))
+        console.print(table)
+    finally:
+        conn.close()
+
+
+@app.command()
+def jugador(
+    nombre: str = typer.Argument(..., help="Nombre o parte del nombre."),
+    dias: int = typer.Option(90, help="Dias de historico de valor a dibujar."),
+) -> None:
+    """Ficha de un jugador, con la evolución de su valor de mercado."""
+    conn = connect()
+    try:
+        rows = queries.find_players(conn, nombre)
+        if not rows:
+            console.print(f"[yellow]Ningun jugador coincide con '{nombre}'.[/yellow]")
+            return
+
+        if len(rows) > 1:
+            table = display.player_table(f"{len(rows)} coincidencias", extra=("Dueno",))
+            for row in rows:
+                table.add_row(*display.player_row(row, row["owner"] or "libre"))
+            console.print(table)
+            console.print("\n[dim]Afina el nombre para ver la ficha completa.[/dim]")
+            return
+
+        row = rows[0]
+        console.print(f"\n[bold]{row['name']}[/bold]  {row['position'] or '?'} · "
+                      f"{row['team'] or '?'}")
+        console.print(f"  Valor        {display.money(row['market_value'])} "
+                      f"{display.delta(row['delta_1d'])}")
+        console.print(f"  Probabilidad {display.probability(row['probability'])} "
+                      f"{display.status(row['status'])}")
+        console.print(f"  Jerarquia    {row['jerarquia'] if row['jerarquia'] is not None else '-'}")
+        console.print(f"  Proximo      {display.opponent(row)}")
+        console.print(f"  Dueno        {row['owner'] or 'libre'}"
+                      + (f" · clausula {display.money(row['clause_value'])}"
+                         if row["clause_value"] else ""))
+
+        history = queries.value_history(conn, row["id"], days=dias)
+        if len(history) > 1:
+            valores = [h["market_value"] for h in history]
+            cambio = valores[-1] - valores[0]
+            console.print(
+                f"\n  Valor ultimos {len(valores)} dias  "
+                f"{display.sparkline(valores)}  {display.delta(cambio)}"
+            )
+            console.print(
+                f"  [dim]{history[0]['snapshot_date']}  "
+                f"min {display.money(min(valores), short=True)} / "
+                f"max {display.money(max(valores), short=True)}  "
+                f"{history[-1]['snapshot_date']}[/dim]"
+            )
+    finally:
+        conn.close()
+
+
+@app.command()
+def liga() -> None:
+    """Clasificación de tu liga."""
+    conn = connect()
+    try:
+        rows = queries.standings(conn)
+        if not rows:
+            console.print("[yellow]Sin clasificacion capturada.[/yellow]")
+            return
+        table = Table(title="Clasificacion", header_style="bold", title_justify="left")
+        table.add_column("#", justify="right")
+        table.add_column("Participante")
+        table.add_column("Puntos", justify="right")
+        table.add_column("Jugadores", justify="right")
+        table.add_column("Valor plantilla", justify="right")
+        for row in rows:
+            nombre = f"[bold]{row['name']}[/bold]" if row["is_me"] else row["name"]
+            table.add_row(
+                str(row["position"] or "-"), nombre, str(row["points"] or 0),
+                str(row["squad_size"] or 0), display.money(row["team_value"]),
+            )
+        console.print(table)
+    finally:
+        conn.close()
 
 
 @app.command()
