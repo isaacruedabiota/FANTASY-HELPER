@@ -374,6 +374,88 @@ def xpts(
 
 
 @app.command()
+def valor(
+    limite: int = typer.Option(12, help="Cuantas filas por tabla."),
+    minimo: int = typer.Option(None, help="Valor minimo del jugador, en euros."),
+    mios: bool = typer.Option(False, "--mios", help="Solo tus jugadores."),
+) -> None:
+    """Quién va a subir y quién va a bajar de valor la próxima semana.
+
+    En Mister la revalorización es beneficio limpio, así que esto es dinero que
+    no depende de puntos ni de alineaciones.
+    """
+    from fantasyhelper import market
+
+    conn = connect()
+    try:
+        modelo = market.calibrate(conn)
+        if not modelo.useful:
+            console.print(
+                "[yellow]La señal es demasiado débil para fiarse.[/yellow] "
+                "Hace falta mas historico: [bold]fh mister historico[/bold]."
+            )
+            return
+
+        deriva = market.band_drift(conn)
+        tabla = Table(title="Como se comporta cada tramo de precio",
+                      header_style="bold", title_justify="left")
+        for columna in ("Tramo", "Movimiento 7d", "Volatilidad", "Fiabilidad", "Muestras"):
+            tabla.add_column(columna, justify="right" if columna != "Tramo" else "left")
+        for _, _, nombre in market.PRICE_BANDS:
+            banda = modelo.bands.get(nombre)
+            if banda is None:
+                continue
+            tabla.add_row(
+                nombre,
+                display.percent(deriva.get(nombre)),
+                f"{banda.volatility:.1%}",
+                f"{banda.correlation:+.2f}" if banda.useful else "[red]no fiable[/red]",
+                f"{banda.samples:,}".replace(",", "."),
+            )
+        console.print(tabla)
+
+        filas = market.attach(conn, queries.all_players(conn), model=modelo)
+        filas = [f for f in filas if f.get("ventaja") is not None]
+        if minimo:
+            filas = [f for f in filas if (f["market_value"] or 0) >= minimo]
+        if mios:
+            me = queries.my_manager(conn)
+            filas = [f for f in filas if me and f["owner"] == me["name"]]
+        if not filas:
+            console.print("[yellow]Sin datos suficientes.[/yellow]")
+            return
+
+        filas.sort(key=lambda f: -f["euros_ventaja"])
+        for titulo, seleccion in (
+            ("\nVan a subir mas que los de su precio", filas[:limite]),
+            ("\nVan a quedarse atras: si tienes alguno, es el momento de venderlo",
+             list(reversed(filas))[:limite]),
+        ):
+            table = display.player_table(
+                titulo, extra=("Tramo", "7d %", "vs tramo", "€", "Dueno")
+            )
+            for fila in seleccion:
+                table.add_row(*display.player_row(
+                    fila,
+                    fila["tramo"],
+                    display.percent(fila["cambio_reciente"]),
+                    display.percent(fila["ventaja"]),
+                    display.delta(fila["euros_ventaja"]),
+                    display.truncate(fila["owner"], 10) if fila["owner"] else "libre",
+                ))
+            console.print(table)
+
+        console.print(
+            "\n[dim]'vs tramo' es lo que se espera que suba POR ENCIMA de los de su "
+            "mismo precio, que es lo unico que se ha medido. Que suba el tramo "
+            "entero da igual para decidir: entonces sube tambien lo que ya tienes."
+            "[/dim]"
+        )
+    finally:
+        conn.close()
+
+
+@app.command()
 def chollos(
     minimo: float = typer.Option(0.7, help="Probabilidad minima de ser titular."),
     limite: int = typer.Option(20, help="Cuantas filas mostrar."),

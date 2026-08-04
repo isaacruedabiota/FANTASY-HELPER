@@ -25,7 +25,7 @@ primer día, sin esperar a acumular histórico propio.
 | 1 | Consultas por CLI: plantilla, mercado, cláusulas, chollos, ficha | **funcionando** |
 | 2a | Puntos esperados (xPts) y euros por punto | **funcionando** |
 | 2b | Once óptimo y web | pendiente |
-| 3 | Modelo de valor de mercado entrenado con el histórico | pendiente |
+| 3 | Modelo de valor de mercado entrenado con el histórico | **funcionando** |
 | 4 | Segundo adapter (Biwenger / LaLiga Fantasy) | pendiente |
 
 ## El saldo de los rivales
@@ -89,6 +89,8 @@ fh movimientos --tipos   # qué tipos de movimiento se han visto ya
 fh chollos               # libres y baratos que además van a jugar
 fh xpts                  # puntos esperados y euros por punto esperado
 fh xpts --minimo 0.7 --posicion DL
+fh valor                 # quién va a subir y quién a bajar de valor
+fh valor --mios          # solo los tuyos: a quién conviene vender ya
 fh jugador pedri         # ficha con la evolución del valor
 fh liga                  # clasificación
 ```
@@ -135,6 +137,40 @@ medias.
 Para que capture solo, sin tener una terminal abierta, registra `fh planificador` como
 tarea programada de Windows. Si el ordenador estuvo apagado a la hora prevista, el job
 se ejecuta igualmente al arrancar (hay 6 horas de margen), así no se pierde el día.
+
+## El valor de mercado
+
+La revalorización es beneficio limpio, así que es dinero que no depende de puntos ni de
+alineaciones. Con un año de valores diarios se puede comprobar si es predecible, y lo es:
+**el cambio de los últimos siete días predice el de los siete siguientes**.
+
+Pero solo comparando a cada jugador con los de su mismo rango de precio:
+
+| Tramo | Volatilidad semanal | Correlación |
+|---|---|---|
+| <1M | 29,9% | +0,23 |
+| 1-3M | 19,0% | +0,76 |
+| 3-8M | 12,8% | +0,72 |
+| 8-15M | 5,4% | +0,72 |
+| >15M | 1,4% | +0,68 |
+
+Metiendo a todos en el mismo saco la correlación se cae a +0,33, y no porque la señal sea
+débil sino porque las escalas no son comparables: uno de 500k oscila un 30% en una semana
+y uno de 24M un 1,4%. Al mezclarlos, la calibración la marcan los baratos y a los caros se
+les aplica una vara que no es la suya.
+
+Se vio en la primera tabla que salió: predecía que Mbappé, Pedri, Yamal y Vinicius iban a
+caer un 6% cuando apenas se habían movido un 1%. Estaban por debajo de la «media del
+mercado», que ese día era +21% porque los baratos estaban disparados en pretemporada.
+Comparados con los de su tramo, que iban a −1,1%, no estaban cayendo en absoluto.
+
+El modelo **se recalibra en cada ejecución** sobre el histórico guardado, en vez de llevar
+constantes escritas a mano: si Mister cambia su algoritmo no nos vamos a enterar por
+ningún otro medio.
+
+Lo más probable es que esto funcione porque Mister reparte cada movimiento entre varios
+días en vez de aplicarlo de golpe. Si es así no adivina nada: lee un ajuste que ya está en
+marcha y no ha terminado. Sirve para decidir igual, pero no es lo mismo.
 
 ## Conectar Mister
 

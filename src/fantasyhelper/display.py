@@ -94,6 +94,14 @@ def opponent(row: sqlite3.Row) -> str:
     return f"{where}{truncate(name, TEAM_WIDTH)}{sufijo}"
 
 
+def percent(value: float | None) -> str:
+    """Variacion relativa, coloreada como el dinero: verde sube, rojo baja."""
+    if value is None:
+        return "-"
+    color = "green" if value > 0 else "red" if value < 0 else "dim"
+    return f"[{color}]{value:+.1%}[/{color}]"
+
+
 def points(value: float | None) -> str:
     """Puntos esperados. Un decimal: mas precision seria fingir exactitud."""
     return "-" if value is None else f"{value:.1f}"
