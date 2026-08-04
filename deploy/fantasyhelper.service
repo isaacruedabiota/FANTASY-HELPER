@@ -1,0 +1,31 @@
+[Unit]
+Description=FantasyHelper: captura diaria de Mister y FutbolFantasy
+Documentation=https://github.com/local/fantasyhelper
+# La captura necesita red; sin esto systemd puede arrancarla antes de tenerla.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/fantasyhelper
+ExecStart=/home/%i/fantasyhelper/.venv/bin/fh planificador
+
+# El planificador debe seguir vivo siempre: si algo lo tumba, se reintenta.
+Restart=always
+RestartSec=60
+
+# Las horas de captura estan en Europe/Madrid dentro del propio planificador,
+# asi que la zona del sistema no le afecta.
+Environment=PYTHONUNBUFFERED=1
+
+# Endurecimiento basico: el proceso solo necesita leer su codigo y escribir en
+# data/, nada mas.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/%i/fantasyhelper/data
+
+[Install]
+WantedBy=multi-user.target

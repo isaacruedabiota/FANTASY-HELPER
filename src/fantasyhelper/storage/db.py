@@ -40,6 +40,9 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
 _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("raw_payload", "content_encoding", "TEXT NOT NULL DEFAULT 'identity'"),
     ("player_alias", "team_id", "INTEGER REFERENCES team(id)"),
+    ("ownership_snapshot", "clause_level", "INTEGER"),
+    ("ownership_snapshot", "clause_floor", "INTEGER"),
+    ("league", "baseline_date", "TEXT"),
 )
 
 

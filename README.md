@@ -27,10 +27,28 @@ primer día, sin esperar a acumular histórico propio.
 | 3 | Modelo de valor de mercado entrenado con el histórico | pendiente |
 | 4 | Segundo adapter (Biwenger / LaLiga Fantasy) | pendiente |
 
-Limitación conocida: **Mister no publica el saldo de los rivales**. El propio sí (va en
-`_FG_user` de la página completa) y el radar de cláusulas lo usa para filtrar por lo que
-puedes pagar. El de los rivales habrá que estimarlo siguiendo sus movimientos en el
-mercado día a día, que es trabajo de la Fase 3.
+## El saldo de los rivales
+
+Mister solo publica el saldo propio. El de los demás se reconstruye:
+
+```
+saldo = 50.000.000
+      − valor de los 15 jugadores con los que arrancó
+      − lo gastado en subir cláusulas
+      ± compras, ventas y bonificaciones posteriores
+```
+
+Los dos primeros términos son exactos. El primero se ancla en la captura del día en que
+se crea o reinicia la liga (`fh baseline`), y por eso hay que hacer esa captura antes de
+que nadie fiche. El segundo sale de que cada jugador lleva su nivel de cláusula: subir un
+escalón cuesta el **20% del suelo**, y los multiplicadores son `[1,5 · 2 · 2,5 · 3 · 3,5 · 4]`.
+
+Validado contra la única verdad disponible —el saldo propio— y coincide al euro. El
+tercer término, los movimientos posteriores, se lee del feed y aún está por implementar.
+
+## Raspberry Pi
+
+Instalación, servicio de systemd y copias de seguridad: [deploy/README.md](deploy/README.md).
 
 ## Instalación
 
@@ -56,6 +74,7 @@ fh plantilla --de Skar   # la de un rival
 fh mercado               # el mercado de hoy, por probabilidad de ser titular
 fh clausulas             # radar de cláusulas + a quién te conviene blindar
 fh clausulas --saldo 3000000
+fh saldos                # saldo estimado de cada rival
 fh chollos               # libres y baratos que además van a jugar
 fh jugador pedri         # ficha con la evolución del valor
 fh liga                  # clasificación

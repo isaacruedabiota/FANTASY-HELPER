@@ -358,6 +358,93 @@ def liga() -> None:
 
 
 @app.command()
+def baseline(
+    fecha: str = typer.Argument(None, help="Dia del reinicio, AAAA-MM-DD. Por defecto hoy."),
+) -> None:
+    """Fija el día desde el que cuentan las cuentas de la liga.
+
+    Hay que ejecutarlo una vez tras crear o reiniciar la liga, con una captura
+    ya hecha de ese día. Es el ancla para estimar el saldo de los rivales.
+    """
+    from fantasyhelper.storage.db import today, transaction
+
+    fecha = fecha or today()
+    conn = connect()
+    try:
+        tiene = conn.execute(
+            "SELECT COUNT(*) n FROM ownership_snapshot WHERE snapshot_date = ?", (fecha,)
+        ).fetchone()["n"]
+        if not tiene:
+            console.print(
+                f"[red]No hay ninguna captura de plantillas del {fecha}.[/red] "
+                "Ejecuta antes [bold]fh capturar --solo mister[/bold]."
+            )
+            raise typer.Exit(1)
+        with transaction(conn):
+            queries.set_baseline_date(conn, fecha)
+    finally:
+        conn.close()
+    console.print(f"[green]Cuentas ancladas al {fecha}[/green] ({tiene} propiedades).")
+
+
+@app.command()
+def saldos() -> None:
+    """Saldo estimado de cada rival.
+
+    Mister solo publica el tuyo. El de los demás se reconstruye a partir de la
+    regla con la que arranca la liga (50M menos el valor de los 15 jugadores
+    iniciales) descontando lo que hayan gastado en subir cláusulas.
+    """
+    conn = connect()
+    try:
+        if queries.baseline_date(conn) is None:
+            console.print(
+                "[yellow]Falta fijar el día de partida de la liga.[/yellow]\n"
+                "Tras crear o reiniciar la liga, con una captura hecha de ese día: "
+                "[bold]fh baseline[/bold]"
+            )
+            return
+
+        filas = queries.estimated_balances(conn)
+        if not filas:
+            console.print(
+                "[yellow]Sin datos suficientes.[/yellow] Hace falta una captura de "
+                "las plantillas del día de partida."
+            )
+            return
+
+        table = Table(title="Saldo estimado", header_style="bold", title_justify="left")
+        table.add_column("Participante")
+        table.add_column("Plantilla inicial", justify="right")
+        table.add_column("Gasto clausulas", justify="right")
+        table.add_column("Saldo estimado", justify="right")
+        table.add_column("Saldo real", justify="right")
+        for row in filas:
+            nombre = f"[bold]{row['name']}[/bold]" if row["is_me"] else row["name"]
+            real = display.money(row["saldo_real"]) if row["saldo_real"] is not None else "-"
+            # Si conocemos el real, el contraste dice si la estimacion vale.
+            if row["saldo_real"] is not None:
+                desvio = row["saldo_estimado"] - row["saldo_real"]
+                color = "green" if abs(desvio) < 100_000 else "red"
+                real = f"[{color}]{real}[/{color}]"
+            table.add_row(
+                nombre,
+                display.money(row["valor_inicial"]),
+                display.money(int(row["gasto_clausulas"])),
+                display.money(int(row["saldo_estimado"])),
+                real,
+            )
+        console.print(table)
+        console.print(
+            "\n[dim]La estimación parte de la primera captura tras el reinicio. "
+            "Compras y ventas posteriores aún no se descuentan: para eso hace "
+            "falta el registro del feed.[/dim]"
+        )
+    finally:
+        conn.close()
+
+
+@app.command()
 def reconciliar() -> None:
     """Unifica equipos y jugadores entre fuentes. Se ejecuta ya al capturar."""
     from fantasyhelper.reconcile import reconcile

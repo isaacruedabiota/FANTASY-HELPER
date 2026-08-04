@@ -293,6 +293,103 @@ def value_history(
     ).fetchall()
 
 
+#: Presupuesto con el que arranca cada participante al crearse o reiniciarse la
+#: liga: 15 jugadores aleatorios y 50M menos el valor de esos jugadores.
+#: Verificado contra el saldo real propio el dia del reinicio, al euro.
+INITIAL_BUDGET = 50_000_000
+
+#: Subir un escalon de clausula cuesta el 20% del suelo del jugador
+#: (listeners.js: cost = floor * 0.2 * (nivel_nuevo - nivel_actual)).
+CLAUSE_STEP_COST_RATIO = 0.2
+
+
+def baseline_date(conn: sqlite3.Connection) -> str | None:
+    """Dia desde el que cuentan las cuentas de la liga.
+
+    Es el ancla de la estimacion de saldos y hay que fijarlo a mano tras crear o
+    reiniciar la liga (`fh baseline`). Deducirlo automaticamente seria adivinar,
+    y equivocarse aqui desplaza el saldo de todos los rivales.
+    """
+    row = conn.execute(
+        "SELECT baseline_date FROM league WHERE baseline_date IS NOT NULL "
+        "ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    return row["baseline_date"] if row else None
+
+
+def set_baseline_date(conn: sqlite3.Connection, date: str) -> int:
+    return conn.execute("UPDATE league SET baseline_date = ?", (date,)).rowcount
+
+
+def estimated_balances(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Saldo estimado de cada participante.
+
+    Mister solo publica el saldo propio, pero se puede reconstruir el de los
+    rivales porque la liga arranca con una regla conocida:
+
+        saldo = 50M - valor de la plantilla inicial
+                    - lo gastado en subir clausulas
+                    + - movimientos posteriores (compras, ventas, bonificaciones)
+
+    El primer termino se ancla en la primera captura tras el reinicio, que es
+    exacta. Lo gastado en clausulas sale del nivel de cada jugador. Los
+    movimientos posteriores se van acumulando del feed segun ocurren.
+
+    Se devuelve tambien el saldo real cuando se conoce (el propio), para poder
+    contrastar la estimacion contra la verdad.
+    """
+    base = baseline_date(conn)
+    if base is None:
+        return []
+
+    return conn.execute(
+        """
+        WITH primera AS (
+            SELECT ? AS d
+        ),
+        ultima AS (
+            SELECT MAX(snapshot_date) AS d FROM ownership_snapshot
+        ),
+        plantilla_inicial AS (
+            SELECT o.manager_id, SUM(v.market_value) AS valor
+            FROM ownership_snapshot o
+            JOIN player_value_snapshot v
+              ON v.player_id = o.player_id AND v.provider = 'mister'
+             AND v.snapshot_date = o.snapshot_date AND v.source = 'mister'
+            WHERE o.snapshot_date = (SELECT d FROM primera)
+            GROUP BY o.manager_id
+        ),
+        gasto_clausulas AS (
+            SELECT o.manager_id,
+                   SUM(COALESCE(o.clause_level, 0) * o.clause_floor * ?) AS gasto
+            FROM ownership_snapshot o
+            WHERE o.snapshot_date = (SELECT d FROM ultima)
+              AND o.clause_floor IS NOT NULL
+            GROUP BY o.manager_id
+        ),
+        saldo_real AS (
+            SELECT manager_id, balance,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY manager_id ORDER BY snapshot_date DESC
+                   ) AS rn
+            FROM manager_snapshot WHERE balance IS NOT NULL
+        )
+        SELECT m.id, m.name, m.is_me,
+               pi.valor AS valor_inicial,
+               COALESCE(gc.gasto, 0) AS gasto_clausulas,
+               ? - COALESCE(pi.valor, 0) - COALESCE(gc.gasto, 0) AS saldo_estimado,
+               sr.balance AS saldo_real
+        FROM manager m
+        LEFT JOIN plantilla_inicial pi ON pi.manager_id = m.id
+        LEFT JOIN gasto_clausulas gc ON gc.manager_id = m.id
+        LEFT JOIN saldo_real sr ON sr.manager_id = m.id AND sr.rn = 1
+        WHERE pi.valor IS NOT NULL
+        ORDER BY saldo_estimado DESC
+        """,
+        (base, CLAUSE_STEP_COST_RATIO, INITIAL_BUDGET),
+    ).fetchall()
+
+
 def standings(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Clasificacion con el ultimo estado conocido de cada participante."""
     return conn.execute(

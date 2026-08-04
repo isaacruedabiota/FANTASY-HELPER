@@ -109,6 +109,10 @@ CREATE TABLE IF NOT EXISTS league (
     name         TEXT NOT NULL,
     season       TEXT,
     account_id   INTEGER REFERENCES account(id),
+    -- Dia desde el que cuentan las cuentas: la primera captura tras crear o
+    -- reiniciar la liga, cuando todos tienen el presupuesto de salida. Es el
+    -- ancla para estimar el saldo de los rivales, que Mister no publica.
+    baseline_date TEXT,
     UNIQUE (provider, external_id)
 );
 
@@ -157,6 +161,11 @@ CREATE TABLE IF NOT EXISTS ownership_snapshot (
     clause_value       INTEGER,         -- lo que cuesta arrebatarlo
     clause_locked_until TEXT,           -- blindaje temporal, si aplica
     buy_price          INTEGER,         -- lo que pago su dueno, si se conoce
+    -- Nivel de clausula: 0 = por defecto (x1.5), y cada escalon multiplica mas
+    -- (x2, x2.5 ... x4). Subir un escalon cuesta el 20% del suelo, asi que de
+    -- aqui sale cuanto ha gastado un rival en blindar su plantilla.
+    clause_level       INTEGER,
+    clause_floor       INTEGER,         -- base sobre la que se calcula todo
     UNIQUE (snapshot_date, league_id, player_id)
 );
 CREATE INDEX IF NOT EXISTS idx_ownership_manager

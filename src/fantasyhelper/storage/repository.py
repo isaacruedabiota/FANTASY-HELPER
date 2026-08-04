@@ -250,25 +250,59 @@ def record_ownership(
     clause_value: int | None = None,
     clause_locked_until: str | None = None,
     buy_price: int | None = None,
+    clause_level: int | None = None,
+    clause_floor: int | None = None,
 ) -> None:
     conn.execute(
         """
         INSERT INTO ownership_snapshot
             (snapshot_date, captured_at, league_id, player_id, manager_id,
-             clause_value, clause_locked_until, buy_price)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             clause_value, clause_locked_until, buy_price, clause_level, clause_floor)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (snapshot_date, league_id, player_id) DO UPDATE SET
             captured_at = excluded.captured_at,
             manager_id = excluded.manager_id,
             clause_value = excluded.clause_value,
             clause_locked_until = excluded.clause_locked_until,
-            buy_price = COALESCE(excluded.buy_price, ownership_snapshot.buy_price)
+            buy_price = COALESCE(excluded.buy_price, ownership_snapshot.buy_price),
+            clause_level = COALESCE(excluded.clause_level, ownership_snapshot.clause_level),
+            clause_floor = COALESCE(excluded.clause_floor, ownership_snapshot.clause_floor)
         """,
         (
             today(), utcnow(), league_id, player_id, manager_id,
-            clause_value, clause_locked_until, buy_price,
+            clause_value, clause_locked_until, buy_price, clause_level, clause_floor,
         ),
     )
+
+
+def prune_ownership(
+    conn: sqlite3.Connection,
+    *,
+    league_id: int,
+    manager_id: int,
+    keep_player_ids: set[int],
+) -> int:
+    """Borra del snapshot de hoy los jugadores que este participante ya no tiene.
+
+    Sin esto la plantilla diaria acumula fantasmas: si alguien vende (o la liga
+    se reinicia) despues de una captura, la fila de propiedad anterior sigue ahi
+    y el participante aparece con mas jugadores de los que tiene. Eso rompe
+    cualquier calculo que sume el valor de una plantilla.
+    """
+    rows = conn.execute(
+        "SELECT player_id FROM ownership_snapshot "
+        "WHERE snapshot_date = ? AND league_id = ? AND manager_id = ?",
+        (today(), league_id, manager_id),
+    ).fetchall()
+
+    sobrantes = [r["player_id"] for r in rows if r["player_id"] not in keep_player_ids]
+    for player_id in sobrantes:
+        conn.execute(
+            "DELETE FROM ownership_snapshot "
+            "WHERE snapshot_date = ? AND league_id = ? AND player_id = ?",
+            (today(), league_id, player_id),
+        )
+    return len(sobrantes)
 
 
 def record_manager_state(

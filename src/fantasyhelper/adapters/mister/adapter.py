@@ -216,8 +216,10 @@ class MisterAdapter:
 
             squad = parse_user_squad(payload)
             with transaction(conn):
+                actuales: set[int] = set()
                 for player in squad.players:
                     player_id = self._player_id(conn, player)
+                    actuales.add(player_id)
                     repo.record_ownership(
                         conn,
                         league_id=league_id,
@@ -225,6 +227,8 @@ class MisterAdapter:
                         manager_id=manager["id"],
                         clause_value=player.clause_value,
                         buy_price=player.asking_price,
+                        clause_level=player.clause_level,
+                        clause_floor=player.clause_floor,
                     )
                     if player.market_value is not None:
                         repo.record_player_value(
@@ -232,6 +236,15 @@ class MisterAdapter:
                             player_id=player_id, market_value=player.market_value,
                         )
                     rows += 1
+
+                # La plantilla que acaba de llegar es la verdad: lo que quede de
+                # una captura anterior y ya no este, sobra.
+                fantasmas = repo.prune_ownership(
+                    conn, league_id=league_id, manager_id=manager["id"],
+                    keep_player_ids=actuales,
+                )
+                if fantasmas:
+                    log.info("    %d jugadores ya no estan en su plantilla", fantasmas)
 
                 if squad.manager.team_value is not None:
                     repo.record_manager_state(

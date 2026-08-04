@@ -68,6 +68,10 @@ class MisterPlayer:
     bought_at: str | None = None
     #: Nombre del dueno, cuando la fuente lo trae (el catalogo si).
     owner_name: str | None = None
+    #: Nivel de clausula (0 = por defecto). Cada escalon por encima se ha pagado.
+    clause_level: int | None = None
+    #: Base sobre la que se calculan clausula y coste de subirla.
+    clause_floor: int | None = None
 
 
 @dataclass
@@ -300,6 +304,8 @@ def parse_json_player(entry: dict, *, default_owner: str | None = None) -> Miste
         bought_at=entry.get("created"),
         asking_price=_as_int(entry.get("price")) or _as_int(market.get("price")),
         owner_name=entry.get("uc_name") or owner.get("name"),
+        clause_level=_as_int(entry.get("default") or clause.get("default")),
+        clause_floor=_as_int(entry.get("floor") or clause.get("floor")),
     )
 
 
