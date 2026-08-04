@@ -216,6 +216,16 @@ def clausulas(
     """
     conn, me = _con_liga()
     try:
+        # Por defecto se filtra por lo que realmente puedes pagar: mostrar
+        # objetivos fuera de tu alcance solo estorba.
+        if saldo is None:
+            saldo = queries.my_balance(conn)
+            if saldo is not None:
+                console.print(
+                    f"[dim]Filtrando por tu saldo: {display.money(saldo)} € "
+                    f"(usa --saldo para cambiarlo)[/dim]"
+                )
+
         objetivos = queries.clause_targets(
             conn, manager_id=me["id"], budget=saldo, min_probability=minimo
         )

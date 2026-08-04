@@ -20,8 +20,10 @@ from fantasyhelper.adapters.mister.client import MisterClient
 from fantasyhelper.adapters.mister.endpoints import load_endpoints
 from fantasyhelper.adapters.mister.parsers import (
     MisterPlayer,
+    parse_player_search,
     parse_players,
     parse_standings,
+    parse_user_config,
     parse_user_squad,
     parse_value_history,
 )
@@ -33,6 +35,32 @@ from fantasyhelper.utils.names import slugify
 log = logging.getLogger(__name__)
 
 PROVIDER = "mister"
+
+#: Cuantos jugadores devuelve cada pagina del catalogo.
+SEARCH_PAGE_SIZE = 50
+
+#: Filtros que admite la busqueda. Se envian solo si se piden expresamente:
+#: mandarlos a cero NO significa "sin filtrar". Los topes (value_to, clause_to)
+#: se interpretan literalmente, asi que un 0 quiere decir "hasta 0 euros" y
+#: deja la respuesta vacia. Costo un rato descubrirlo.
+SEARCH_FILTERS = (
+    "position", "value_from", "value_to", "clause_from", "clause_to",
+    "team", "injured", "favs", "owner", "benched", "stealable",
+)
+
+
+def _search_form(*, offset: int, **filters: int) -> dict[str, object]:
+    """Formulario de busqueda, serializado como lo hace jQuery.
+
+    jQuery convierte {'filters': {'position': 1}} en 'filters[position]=1', de
+    ahi los corchetes en las claves.
+    """
+    form: dict[str, object] = {"offset": offset, "order": 0, "name": ""}
+    for name, value in filters.items():
+        if name not in SEARCH_FILTERS:
+            raise ValueError(f"filtro desconocido: {name}")
+        form[f"filters[{name}]"] = value
+    return form
 
 
 class MisterAdapter:
@@ -214,6 +242,64 @@ class MisterAdapter:
             log.info("  plantilla de %-18s %d jugadores", manager["name"], len(squad.players))
         return rows
 
+    def capture_catalog(
+        self, conn: sqlite3.Connection, league_id: int, *, max_pages: int = 30
+    ) -> int:
+        """Recorre el catalogo completo de jugadores, pagina a pagina.
+
+        La pagina /search solo muestra los 50 primeros; el catalogo entero se
+        obtiene del mismo endpoint JSON que la ficha de jugador, pasandole
+        `offset`. Ademas el JSON trae el nombre completo y la clausula, que el
+        HTML no da.
+        """
+        total = 0
+        for page in range(max_pages):
+            offset = page * SEARCH_PAGE_SIZE
+            payload = self.client.fetch_json(
+                conn,
+                "players",
+                endpoint_key=f"ajax/catalogo/{offset:05d}",
+                **_search_form(offset=offset),
+            )
+            if not payload:
+                break
+
+            players = parse_player_search(payload)
+            if not players:
+                break
+
+            with transaction(conn):
+                for player in players:
+                    player_id = self._player_id(conn, player)
+                    if player.market_value is not None:
+                        repo.record_player_value(
+                            conn, provider=self.provider, source=self.provider,
+                            player_id=player_id, market_value=player.market_value,
+                        )
+                    # El catalogo tambien dice de quien es cada jugador, lo que
+                    # completa las plantillas de participantes que aun no hemos
+                    # recorrido uno a uno.
+                    manager_id = None
+                    if player.owner_id:
+                        manager_id = repo.upsert_manager(
+                            conn, league_id=league_id, external_id=player.owner_id,
+                            name=player.owner_name or player.owner_id,
+                        )
+                    repo.record_ownership(
+                        conn, league_id=league_id, player_id=player_id,
+                        manager_id=manager_id,
+                        # Para un jugador libre, Mister devuelve como clausula su
+                        # propio valor; eso no es una clausula y confundiria el radar.
+                        clause_value=player.clause_value if manager_id else None,
+                    )
+                    total += 1
+
+            log.info("  catalogo %5d-%-5d %d jugadores", offset, offset + len(players), len(players))
+            # Una pagina incompleta significa que ya no hay mas.
+            if len(players) < SEARCH_PAGE_SIZE:
+                break
+        return total
+
     def backfill_values(
         self,
         conn: sqlite3.Connection,
@@ -319,6 +405,18 @@ class MisterAdapter:
         """
         external_id = settings.mister_league_id
         payload = None
+        self.user = None
+
+        # La pagina completa trae `_FG_user`: saldo, liga activa y su nombre.
+        # Es la unica via al saldo, y solo al propio: Mister no publica el de
+        # los rivales por ningun sitio.
+        try:
+            self.user = parse_user_config(self.client.fetch_full_page(conn))
+        except Exception as exc:
+            log.warning("no se pudo leer la configuracion del usuario: %s", exc)
+
+        if self.user and self.user.league_external_id:
+            external_id = self.user.league_external_id
 
         managers = parse_standings(standings_html) if standings_html else []
         if managers:
@@ -344,9 +442,25 @@ class MisterAdapter:
             conn,
             provider=self.provider,
             external_id=external_id,
-            name=f"Liga {external_id}",
+            name=(self.user.league_name if self.user else None) or f"Liga {external_id}",
             season=settings.season,
         )
+
+        # El saldo propio va al mismo sitio que el del resto de participantes,
+        # aunque de los demas quede siempre a NULL.
+        if self.user and self.user.balance is not None:
+            manager_id = repo.upsert_manager(
+                conn, league_id=league_id, external_id=self.user.external_id,
+                name=self.user.name, is_me=True,
+            )
+            repo.record_manager_state(
+                conn, manager_id=manager_id, balance=self.user.balance
+            )
+            log.info(
+                "soy %s en '%s', saldo %s €",
+                self.user.name, self.user.league_name, f"{self.user.balance:,}".replace(",", "."),
+            )
+
         return league_id, payload
 
     def snapshot(self, conn: sqlite3.Connection) -> int:
@@ -377,8 +491,15 @@ class MisterAdapter:
             log.info("%-10s -> %d filas", key, rows)
             total += rows
 
-        # Las plantillas van al final, cuando la clasificacion ya ha registrado
-        # a todos los participantes de los que hay que pedir la suya.
+        # El catalogo completo via API JSON. La pagina /search solo da 50, y de
+        # aqui salen ademas los duenos de todos los jugadores de la liga.
+        try:
+            total += self.capture_catalog(conn, league_id)
+        except Exception as exc:
+            log.error("fallo capturando el catalogo: %s", exc)
+
+        # Las plantillas van al final, cuando el catalogo y la clasificacion ya
+        # han registrado a todos los participantes.
         try:
             total += self.capture_squads(conn, league_id, preloaded=first_squad)
         except Exception as exc:

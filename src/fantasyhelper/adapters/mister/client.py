@@ -219,6 +219,32 @@ class MisterClient:
             log.warning("respuesta inesperada en %s (guardada en crudo)", endpoint.key)
         return body
 
+    def fetch_full_page(self, conn: sqlite3.Connection, path: str = "/team") -> bytes:
+        """Pide la pagina entera, sin las cabeceras de XHR.
+
+        Hace falta porque la configuracion del usuario (`_FG_user`, con el saldo
+        y la liga activa) va incrustada en la pagina completa y no aparece en
+        los fragmentos que devuelve la app.
+        """
+        self._throttle()
+        # Las cabeceras de XHR hay que BORRARLAS, no vaciarlas: mientras esten
+        # presentes, aunque sea vacias, Mister sigue devolviendo el fragmento.
+        request = self._client.build_request("GET", path, headers={"Accept": "text/html"})
+        for header in ("x-requested-with", "partial-request"):
+            if header in request.headers:
+                del request.headers[header]
+        response = self._client.send(request, follow_redirects=True)
+        save_raw(
+            conn,
+            source=self.provider,
+            endpoint="pagina/team",
+            content=response.content,
+            params={"path": path},
+            status_code=response.status_code,
+            content_type=response.headers.get("Content-Type"),
+        )
+        return response.content
+
     def fetch_json(
         self,
         conn: sqlite3.Connection,

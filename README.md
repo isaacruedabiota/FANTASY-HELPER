@@ -27,8 +27,10 @@ primer día, sin esperar a acumular histórico propio.
 | 3 | Modelo de valor de mercado entrenado con el histórico | pendiente |
 | 4 | Segundo adapter (Biwenger / LaLiga Fantasy) | pendiente |
 
-Limitaciones conocidas: `/search` solo devuelve los primeros 50 jugadores del catálogo, y
-Mister no publica el saldo de los rivales (habrá que estimarlo siguiendo el mercado).
+Limitación conocida: **Mister no publica el saldo de los rivales**. El propio sí (va en
+`_FG_user` de la página completa) y el radar de cláusulas lo usa para filtrar por lo que
+puedes pagar. El de los rivales habrá que estimarlo siguiendo sus movimientos en el
+mercado día a día, que es trabajo de la Fase 3.
 
 ## Instalación
 
@@ -95,7 +97,15 @@ usan un **API JSON interno** en `/ajax/sw/*` que es donde está lo verdaderament
 | `/market` | HTML | el mercado del día de tu liga |
 | `/standings` | HTML | clasificación, puntos y valor de plantilla de cada rival |
 | `/ajax/sw/users` | JSON | plantilla completa de un participante **con las cláusulas**, blindajes, fecha de fichaje y el `id_community` de la liga |
-| `/ajax/sw/players` | JSON | ficha del jugador: cláusula, historial de puntos por temporada, próximo partido y **un año de valores diarios** |
+| `/ajax/sw/players` | JSON | con `id`: ficha del jugador (cláusula, puntos por temporada, próximo partido y **un año de valores diarios**). Con `offset`: el **catálogo completo**, de 50 en 50 |
+
+Dos trampas del catálogo, por si hay que volver a tocarlo: los filtros se envían aplanados
+al estilo de jQuery (`filters[position]=1`), y **no se pueden mandar a cero**: `value_to=0`
+se interpreta como "hasta 0 €" y devuelve la lista vacía. Y el campo `clause` llega como
+diccionario en las plantillas pero como entero pelado en el catálogo.
+
+La página completa (sin las cabeceras de XHR) incluye `_FG_user`, que es la única vía al
+**saldo** — y solo al propio: Mister no publica el de los rivales por ningún sitio.
 
 Ninguna ruta lleva el identificador de liga: lo decide la sesión. Se detecta solo a partir
 de `id_community`, que sí publica el API JSON — necesario si juegas más de una liga a la

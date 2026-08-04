@@ -116,6 +116,23 @@ def my_manager(conn: sqlite3.Connection) -> sqlite3.Row | None:
     ).fetchone()
 
 
+def my_balance(conn: sqlite3.Connection) -> int | None:
+    """Mi saldo disponible, o None si aun no se ha capturado.
+
+    Mister solo publica el saldo del usuario de la sesion; el de los rivales no
+    aparece en ninguna respuesta, asi que esta columna queda vacia para ellos.
+    """
+    row = conn.execute(
+        """
+        SELECT s.balance FROM manager_snapshot s
+        JOIN manager m ON m.id = s.manager_id
+        WHERE m.is_me = 1 AND s.balance IS NOT NULL
+        ORDER BY s.snapshot_date DESC LIMIT 1
+        """
+    ).fetchone()
+    return row["balance"] if row else None
+
+
 def squad(conn: sqlite3.Connection, manager_id: int) -> list[sqlite3.Row]:
     """Plantilla de un participante, con valor, clausula y estado."""
     return conn.execute(

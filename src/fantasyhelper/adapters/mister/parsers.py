@@ -23,9 +23,10 @@ en tests/fixtures sin necesidad de sesion.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from bs4 import BeautifulSoup, Tag
 
@@ -65,6 +66,8 @@ class MisterPlayer:
     #: Blindaje activo: mientras dure, la clausula no se puede pagar.
     clause_shield: int | None = None
     bought_at: str | None = None
+    #: Nombre del dueno, cuando la fuente lo trae (el catalogo si).
+    owner_name: str | None = None
 
 
 @dataclass
@@ -185,12 +188,125 @@ def parse_players(html: bytes | str) -> list[MisterPlayer]:
 
 
 @dataclass
+class MisterOwner:
+    """Dueno de un jugador segun el catalogo."""
+
+    external_id: str
+    name: str | None = None
+
+
+@dataclass
 class MisterSquad:
     """Plantilla completa de un participante, con sus clausulas."""
 
     manager: MisterManager
     players: list[MisterPlayer]
     league_external_id: str | None = None
+
+
+#: La configuracion del usuario va incrustada en la pagina completa como
+#: `_FG_user = {...};`. No aparece en los fragmentos XHR, solo en la pagina.
+FG_USER_RE = re.compile(r"_FG_user\s*=\s*(\{.*?\});", re.DOTALL)
+
+
+@dataclass
+class MisterUser:
+    """Lo que Mister publica sobre el usuario de la sesion."""
+
+    external_id: str
+    name: str
+    #: Saldo disponible ahora mismo. Mister no lo publica de los rivales.
+    balance: int | None = None
+    #: Saldo contando pujas y ventas pendientes.
+    future_balance: int | None = None
+    #: Hasta donde permite endeudarse la liga.
+    max_debt: int | None = None
+    league_external_id: str | None = None
+    league_name: str | None = None
+    formation: str | None = None
+    #: Otras ligas del usuario: {id: nombre}.
+    other_leagues: dict[str, str] = field(default_factory=dict)
+
+
+def parse_user_config(html: bytes | str) -> MisterUser | None:
+    """Extrae `_FG_user` de la pagina completa: saldo, liga activa y demas ligas."""
+    text = html.decode("utf-8", errors="replace") if isinstance(html, bytes) else html
+    match = FG_USER_RE.search(text)
+    if not match:
+        return None
+
+    try:
+        data = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        log.warning("_FG_user encontrado pero no es JSON valido")
+        return None
+
+    balance = data.get("balance") or {}
+    if not isinstance(balance, dict):
+        balance = {"current": balance}
+
+    other: dict[str, str] = {}
+    for key, value in (data.get("communities") or {}).items():
+        if isinstance(value, dict) and value.get("name"):
+            other[str(key)] = value["name"]
+
+    return MisterUser(
+        external_id=str(data.get("id_uc", "")),
+        name=data.get("uc_name") or data.get("name") or "",
+        balance=_as_int(balance.get("current")),
+        future_balance=_as_int(balance.get("future")),
+        max_debt=_as_int(balance.get("maxDebt")),
+        league_external_id=_str_or_none(data.get("id_community")),
+        league_name=data.get("community"),
+        formation=data.get("formation"),
+        other_leagues=other,
+    )
+
+
+def parse_json_player(entry: dict, *, default_owner: str | None = None) -> MisterPlayer | None:
+    """Convierte un jugador del API JSON al modelo canonico.
+
+    Sirve tanto para los de una plantilla (`team_now`) como para los del
+    catalogo (`players`): Mister usa la misma forma en ambos sitios.
+    """
+    external_id = entry.get("id")
+    name = entry.get("name")
+    if external_id is None or not name:
+        return None
+
+    # 'clause' llega de dos formas segun el endpoint: un diccionario completo en
+    # las plantillas y un entero pelado en el catalogo.
+    raw_clause = entry.get("clause")
+    clause = raw_clause if isinstance(raw_clause, dict) else {"value": raw_clause}
+    market = entry.get("market") or {}
+    owner = entry.get("owner") if isinstance(entry.get("owner"), dict) else {}
+
+    return MisterPlayer(
+        external_id=str(external_id),
+        # El JSON no trae slug; se deriva del nombre completo, que aqui si viene
+        # entero ("Eric Puerto" y no "E. Puerto" como en el HTML).
+        slug=slugify(name),
+        name=name,
+        position=POSITION_MAP.get(str(entry.get("position"))),
+        team_external_id=_str_or_none(entry.get("id_team") or entry.get("team")),
+        market_value=_as_int(entry.get("value")),
+        owner_id=(
+            _str_or_none(entry.get("id_uc"))
+            or _str_or_none(owner.get("id"))
+            or default_owner
+        ),
+        clause_value=_as_int(clause.get("value")),
+        clause_shield=_as_int(entry.get("shield") or clause.get("shield")),
+        bought_at=entry.get("created"),
+        asking_price=_as_int(entry.get("price")) or _as_int(market.get("price")),
+        owner_name=entry.get("uc_name") or owner.get("name"),
+    )
+
+
+def parse_player_search(payload: dict) -> list[MisterPlayer]:
+    """Extrae una pagina del catalogo de jugadores (`/ajax/sw/players` con offset)."""
+    entries = ((payload.get("data") or {}).get("players")) or []
+    return [player for entry in entries if (player := parse_json_player(entry))]
 
 
 def parse_user_squad(payload: dict) -> MisterSquad:
@@ -211,33 +327,11 @@ def parse_user_squad(payload: dict) -> MisterSquad:
         team_value=_as_int(value.get("value")),
     )
 
-    players: list[MisterPlayer] = []
-    for entry in data.get("team_now") or []:
-        external_id = entry.get("id")
-        name = entry.get("name")
-        if external_id is None or not name:
-            continue
-
-        clause = entry.get("clause") or {}
-        market = entry.get("market") or {}
-
-        players.append(
-            MisterPlayer(
-                external_id=str(external_id),
-                # El JSON no trae slug; se deriva del nombre completo, que aqui
-                # si viene entero ("Eric Puerto" y no "E. Puerto").
-                slug=slugify(name),
-                name=name,
-                position=POSITION_MAP.get(str(entry.get("position"))),
-                team_external_id=_str_or_none(entry.get("id_team")),
-                market_value=_as_int(entry.get("value")),
-                owner_id=_str_or_none(entry.get("id_uc")) or manager.external_id,
-                clause_value=_as_int(clause.get("value")),
-                clause_shield=_as_int(entry.get("shield")),
-                bought_at=entry.get("created"),
-                asking_price=_as_int(entry.get("price")) or _as_int(market.get("price")),
-            )
-        )
+    players = [
+        player
+        for entry in data.get("team_now") or []
+        if (player := parse_json_player(entry, default_owner=manager.external_id))
+    ]
 
     return MisterSquad(
         manager=manager,
