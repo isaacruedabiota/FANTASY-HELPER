@@ -198,3 +198,21 @@ def test_el_marcador_sobrevive_si_aun_no_se_sabe_su_nombre(db):
     repo.upsert_team(db, name="mister-team-77", provider="mister", external_id="77")
     assert merge_placeholder_teams(db) == 0
     assert repo.team_id_for_alias(db, provider="mister", external_id="77") is not None
+
+
+def test_el_nombre_de_mister_sustituye_al_slug_de_futbolfantasy(db):
+    """FutbolFantasy guarda 'deportivo'; Mister dice 'Deportivo da Coruña'."""
+    equipo = repo.upsert_team(db, name="deportivo")
+    repo.rename_team(db, team_id=equipo, name="Deportivo da Coruña")
+
+    fila = db.execute("SELECT name, slug FROM team WHERE id = ?", (equipo,)).fetchone()
+    assert fila["name"] == "Deportivo da Coruña"
+    assert fila["slug"] == "deportivo", "el slug es la clave del cruce y no se toca"
+
+
+def test_no_se_pisa_un_nombre_que_ya_era_legible(db):
+    equipo = repo.upsert_team(db, name="Real Madrid")
+    repo.rename_team(db, team_id=equipo, name="R. Madrid")
+
+    assert db.execute("SELECT name FROM team WHERE id = ?",
+                      (equipo,)).fetchone()["name"] == "Real Madrid"

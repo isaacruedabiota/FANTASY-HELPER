@@ -484,14 +484,18 @@ def record_season_stat(
 
 
 def rename_team(conn: sqlite3.Connection, *, team_id: int, name: str) -> None:
-    """Le pone nombre de verdad a un equipo que solo tenia un numero.
+    """Le pone nombre de verdad a un equipo que no tenia uno legible.
 
-    Solo actua sobre los provisionales: si el equipo ya tiene un nombre puesto
-    por otra fuente se respeta, porque cambiarlo desharia el cruce por slug que
-    ya se hizo con ese nombre.
+    Dos casos, y solo esos dos:
+      - los provisionales ('mister-team-9'), que solo tenian un numero;
+      - los que llegaron de FutbolFantasy, cuyo "nombre" es el propio slug
+        ('deportivo', 'racing'). Mister si publica el nombre completo.
+
+    Un equipo que ya tenga un nombre distinto de su slug se respeta: cambiarlo
+    no aportaria nada y el slug, que es la clave del cruce, no se toca nunca.
     """
     conn.execute(
-        "UPDATE team SET name = ? WHERE id = ? AND slug LIKE 'mister-team-%'",
+        "UPDATE team SET name = ? WHERE id = ? AND (slug LIKE 'mister-team-%' OR name = slug)",
         (name, team_id),
     )
 
