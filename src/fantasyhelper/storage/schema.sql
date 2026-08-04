@@ -279,6 +279,48 @@ CREATE TABLE IF NOT EXISTS player_points (
 CREATE INDEX IF NOT EXISTS idx_points_player ON player_points(player_id, season, matchday);
 
 
+-- Punto de partida congelado de cada participante.
+--
+-- No basta con recordar la FECHA del reinicio y mirar el snapshot de ese dia:
+-- los snapshots del dia en curso se sobreescriben en cada captura, asi que la
+-- "plantilla inicial" iria cambiando bajo los pies y el saldo estimado se
+-- desviaria solo. Aqui se guarda el valor ya calculado, y no se toca mas.
+CREATE TABLE IF NOT EXISTS manager_baseline (
+    id           INTEGER PRIMARY KEY,
+    league_id    INTEGER NOT NULL REFERENCES league(id) ON DELETE CASCADE,
+    manager_id   INTEGER NOT NULL REFERENCES manager(id) ON DELETE CASCADE,
+    baseline_at  TEXT NOT NULL,        -- instante exacto, no solo el dia
+    squad_value  INTEGER NOT NULL,     -- valor de su plantilla en ese instante
+    clause_spend INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (league_id, manager_id)
+);
+
+
+-- Movimientos de la liga (el "feed" de Mister): fichajes, ventas, clausulazos,
+-- altas y avisos del administrador.
+--
+-- Se guarda TODA tarjeta, se reconozca su tipo o no, con su HTML original. Los
+-- tipos se van descubriendo segun ocurren -recien reiniciada la liga solo hay
+-- altas-, y cuando aparezca uno nuevo se reprocesa el historico en vez de
+-- haberlo perdido. Es la misma razon por la que existe raw_payload.
+CREATE TABLE IF NOT EXISTS feed_event (
+    id             INTEGER PRIMARY KEY,
+    external_id    TEXT NOT NULL,      -- 'feed-951299082', o un hash si no trae id
+    league_id      INTEGER REFERENCES league(id) ON DELETE CASCADE,
+    first_seen     TEXT NOT NULL,      -- cuando lo vimos por primera vez
+    snapshot_date  TEXT NOT NULL,
+    kind           TEXT,               -- 'card-join', 'card-market_unified'...
+    relative_time  TEXT,               -- '17h', tal cual lo muestra Mister
+    summary        TEXT,               -- texto plano de la tarjeta
+    player_ids     TEXT,               -- JSON: ids externos de jugadores citados
+    user_ids       TEXT,               -- JSON: ids externos de participantes
+    amounts        TEXT,               -- JSON: cifras en euros detectadas
+    html           BLOB,               -- la tarjeta entera, para reprocesar
+    UNIQUE (external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_feed_fecha ON feed_event(snapshot_date, kind);
+
+
 -- ---------------------------------------------------------------------------
 -- Almacen crudo
 -- ---------------------------------------------------------------------------

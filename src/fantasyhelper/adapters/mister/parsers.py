@@ -23,6 +23,7 @@ en tests/fixtures sin necesidad de sesion.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -396,6 +397,94 @@ def _as_int(value: object) -> int | None:
 
 def _str_or_none(value: object) -> str | None:
     return None if value in (None, "", 0) else str(value)
+
+
+@dataclass
+class FeedEvent:
+    """Una tarjeta del feed, con lo poco que se puede extraer sin saber su tipo."""
+
+    external_id: str
+    kind: str | None
+    summary: str
+    html: str
+    relative_time: str | None = None
+    player_ids: list[str] = field(default_factory=list)
+    user_ids: list[str] = field(default_factory=list)
+    amounts: list[int] = field(default_factory=list)
+
+
+#: '17h', '3d', 'ahora'... Mister muestra el tiempo en relativo, no una fecha.
+RELATIVE_TIME_RE = re.compile(r"^\s*(ahora|\d+\s*(?:s|min|m|h|d|sem)\.?)\s*$", re.IGNORECASE)
+#: Cifras en euros dentro del texto de una tarjeta.
+AMOUNT_RE = re.compile(r"€\s*([\d.]{4,})|([\d.]{7,})")
+#: Las tarjetas rotativas no traen un id estable, asi que se identifican por su
+#: contenido para no reescribirlas cada dia ni duplicarlas.
+UNSTABLE_IDS = {"feed-0", "feed-", ""}
+
+
+def parse_feed(html: bytes | str) -> list[FeedEvent]:
+    """Extrae los movimientos de la liga del feed.
+
+    A proposito NO interpreta cada tipo de tarjeta: guarda todas con su HTML
+    para poder reprocesarlas cuando se sepa que forma tiene cada movimiento.
+    Recien reiniciada una liga solo aparecen altas y avisos del administrador,
+    asi que los tipos de compra y venta se descubren sobre la marcha.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    events: list[FeedEvent] = []
+
+    for card in soup.select("[class*=card-]"):
+        classes = card.get("class") or []
+        kind = next(
+            (c for c in classes if c.startswith("card-") and c != "card-wrapper"), None
+        )
+        if kind is None:
+            continue
+
+        text = card.get_text(" | ", strip=True)
+        if not text:
+            continue
+
+        raw_id = str(card.get("id") or "")
+        external_id = (
+            raw_id
+            if raw_id not in UNSTABLE_IDS
+            else f"{kind}-{hashlib.sha1(text.encode()).hexdigest()[:16]}"
+        )
+
+        player_ids, user_ids = [], []
+        for link in card.select("a[href]"):
+            if match := PLAYER_HREF_RE.search(link["href"]):
+                player_ids.append(match.group(1))
+            elif match := USER_HREF_RE.search(link["href"]):
+                user_ids.append(match.group(1))
+
+        amounts = []
+        for match in AMOUNT_RE.finditer(text):
+            value = parse_money(match.group(1) or match.group(2))
+            if value:
+                amounts.append(value)
+
+        relative = None
+        for node in card.select(".date, .time, time, small"):
+            candidate = node.get_text(strip=True)
+            if RELATIVE_TIME_RE.match(candidate):
+                relative = candidate
+                break
+
+        events.append(
+            FeedEvent(
+                external_id=external_id,
+                kind=kind,
+                summary=text[:500],
+                html=str(card),
+                relative_time=relative,
+                player_ids=list(dict.fromkeys(player_ids)),
+                user_ids=list(dict.fromkeys(user_ids)),
+                amounts=amounts,
+            )
+        )
+    return events
 
 
 def parse_standings(html: bytes | str) -> list[MisterManager]:

@@ -6,6 +6,7 @@ conecte un segundo fantasy no hay que tocar nada de aqui abajo.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 
@@ -273,6 +274,43 @@ def record_ownership(
             clause_value, clause_locked_until, buy_price, clause_level, clause_floor,
         ),
     )
+
+
+def record_feed_event(
+    conn: sqlite3.Connection,
+    *,
+    league_id: int | None,
+    external_id: str,
+    kind: str | None,
+    summary: str,
+    html: str,
+    relative_time: str | None = None,
+    player_ids: list[str] | None = None,
+    user_ids: list[str] | None = None,
+    amounts: list[int] | None = None,
+) -> bool:
+    """Guarda un movimiento del feed. Devuelve True si es nuevo.
+
+    Solo se inserta: un movimiento ya ocurrio y no cambia. Reejecutar la captura
+    no duplica nada, y `first_seen` conserva cuando lo vimos por primera vez,
+    que es lo mas parecido a una fecha real que da Mister (muestra '17h', no
+    una marca de tiempo).
+    """
+    cur = conn.execute(
+        """
+        INSERT INTO feed_event
+            (external_id, league_id, first_seen, snapshot_date, kind,
+             relative_time, summary, player_ids, user_ids, amounts, html)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (external_id) DO NOTHING
+        """,
+        (
+            external_id, league_id, utcnow(), today(), kind, relative_time, summary,
+            json.dumps(player_ids or []), json.dumps(user_ids or []),
+            json.dumps(amounts or []), html,
+        ),
+    )
+    return cur.rowcount > 0
 
 
 def prune_ownership(

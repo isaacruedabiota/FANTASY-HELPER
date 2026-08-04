@@ -50,6 +50,8 @@ DEFAULT_ENDPOINTS: dict[str, Endpoint] = {
     "squad": Endpoint("squad", "/team", note="plantilla propia"),
     # Clasificacion: rivales, puntos y valor de sus plantillas.
     "standings": Endpoint("standings", "/standings", note="clasificacion de la liga"),
+    # Movimientos de la liga: fichajes, ventas, clausulazos y altas.
+    "feed": Endpoint("feed", "/feed", note="movimientos de la liga"),
 }
 
 REQUIRED_KEYS = tuple(DEFAULT_ENDPOINTS)

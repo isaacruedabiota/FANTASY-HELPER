@@ -1,4 +1,4 @@
-"""Tests de la estimacion de saldos de los rivales."""
+﻿"""Tests de la estimacion de saldos de los rivales."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import pytest
 
 from fantasyhelper import queries
 from fantasyhelper.storage import repository as repo
-from fantasyhelper.storage.db import today
 
 
 @pytest.fixture
@@ -41,7 +40,7 @@ def test_sin_ancla_no_estima(db, liga):
 def test_saldo_es_el_presupuesto_menos_la_plantilla(db, liga):
     liga["fichar"](liga["yo"], "Uno", 10_000_000)
     liga["fichar"](liga["yo"], "Dos", 5_000_000)
-    queries.set_baseline_date(db, today())
+    queries.freeze_baseline(db)
 
     fila = next(f for f in queries.estimated_balances(db) if f["name"] == "Yo")
     assert fila["valor_inicial"] == 15_000_000
@@ -51,7 +50,7 @@ def test_saldo_es_el_presupuesto_menos_la_plantilla(db, liga):
 def test_descuenta_lo_gastado_en_subir_clausulas(db, liga):
     """Cada escalon cuesta el 20% del suelo (listeners.js)."""
     liga["fichar"](liga["rival"], "Caro", 2_000_000, nivel=3, suelo=2_000_000)
-    queries.set_baseline_date(db, today())
+    queries.freeze_baseline(db)
 
     fila = next(f for f in queries.estimated_balances(db) if f["name"] == "Rival")
     assert fila["gasto_clausulas"] == pytest.approx(2_000_000 * 0.2 * 3)
@@ -62,7 +61,7 @@ def test_descuenta_lo_gastado_en_subir_clausulas(db, liga):
 
 def test_nivel_cero_no_cuesta_nada(db, liga):
     liga["fichar"](liga["rival"], "Normal", 1_000_000)
-    queries.set_baseline_date(db, today())
+    queries.freeze_baseline(db)
 
     fila = next(f for f in queries.estimated_balances(db) if f["name"] == "Rival")
     assert fila["gasto_clausulas"] == 0
@@ -73,12 +72,61 @@ def test_devuelve_el_saldo_real_cuando_se_conoce(db, liga):
     liga["fichar"](liga["yo"], "Uno", 10_000_000)
     liga["fichar"](liga["rival"], "Otro", 10_000_000)
     repo.record_manager_state(db, manager_id=liga["yo"], balance=40_000_000)
-    queries.set_baseline_date(db, today())
+    queries.freeze_baseline(db)
 
     filas = {f["name"]: f for f in queries.estimated_balances(db)}
     assert filas["Yo"]["saldo_real"] == 40_000_000
     assert filas["Yo"]["saldo_estimado"] == 40_000_000, "estimacion y realidad deben cuadrar"
     assert filas["Rival"]["saldo_real"] is None
+
+
+def _movimiento(db, liga, texto, importe, fecha):
+    db.execute(
+        "INSERT INTO feed_event (external_id, league_id, first_seen, snapshot_date, "
+        "kind, summary, player_ids, user_ids, amounts, html) "
+        "VALUES (?, ?, ?, ?, 'card-transfer', ?, '[]', '[]', ?, '')",
+        (texto[:20] + fecha, liga["league_id"], fecha, fecha, texto, f"[{importe}]"),
+    )
+
+
+def test_una_venta_al_sistema_suma_saldo(db, liga):
+    liga["fichar"](liga["rival"], "Uno", 10_000_000)
+    queries.freeze_baseline(db)
+    _movimiento(db, liga, "Alguien | cambia de | Rival | a | Mister |", 500_000, "2026-08-05")
+
+    fila = next(f for f in queries.estimated_balances(db) if f["name"] == "Rival")
+    assert fila["movimientos"] == 500_000
+    assert fila["saldo_estimado"] == queries.INITIAL_BUDGET - 10_000_000 + 500_000
+
+
+def test_una_compra_al_sistema_resta_saldo(db, liga):
+    liga["fichar"](liga["rival"], "Uno", 10_000_000)
+    queries.freeze_baseline(db)
+    _movimiento(db, liga, "Alguien | cambia de | Mister | a | Rival |", 800_000, "2026-08-05")
+
+    fila = next(f for f in queries.estimated_balances(db) if f["name"] == "Rival")
+    assert fila["movimientos"] == -800_000
+
+
+def test_un_traspaso_entre_participantes_mueve_a_los_dos(db, liga):
+    liga["fichar"](liga["yo"], "Mio", 10_000_000)
+    liga["fichar"](liga["rival"], "Suyo", 10_000_000)
+    queries.freeze_baseline(db)
+    _movimiento(db, liga, "Alguien | cambia de | Yo | a | Rival |", 3_000_000, "2026-08-05")
+
+    filas = {f["name"]: f for f in queries.estimated_balances(db)}
+    assert filas["Yo"]["movimientos"] == 3_000_000
+    assert filas["Rival"]["movimientos"] == -3_000_000
+
+
+def test_los_movimientos_del_dia_del_ancla_no_se_cuentan_dos_veces(db, liga):
+    """Ese dia ya esta reflejado en la plantilla capturada; sumarlo lo duplicaria."""
+    liga["fichar"](liga["rival"], "Uno", 10_000_000)
+    queries.freeze_baseline(db)
+    _movimiento(db, liga, "Alguien | cambia de | Rival | a | Mister |", 500_000, "2026-08-04")
+
+    fila = next(f for f in queries.estimated_balances(db) if f["name"] == "Rival")
+    assert fila["movimientos"] == 0
 
 
 def test_prune_quita_los_jugadores_que_ya_no_estan(db, liga):

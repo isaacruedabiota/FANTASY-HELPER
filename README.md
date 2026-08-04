@@ -38,13 +38,21 @@ saldo = 50.000.000
       ± compras, ventas y bonificaciones posteriores
 ```
 
-Los dos primeros términos son exactos. El primero se ancla en la captura del día en que
-se crea o reinicia la liga (`fh baseline`), y por eso hay que hacer esa captura antes de
-que nadie fiche. El segundo sale de que cada jugador lleva su nivel de cláusula: subir un
-escalón cuesta el **20% del suelo**, y los multiplicadores son `[1,5 · 2 · 2,5 · 3 · 3,5 · 4]`.
+El primer término se **congela** con `fh baseline` justo tras crear o reiniciar la liga,
+antes de que nadie fiche. Congelar y no guardar solo la fecha es deliberado: los snapshots
+del día en curso se reescriben en cada captura, así que una referencia a "el día X" iría
+cambiando bajo los pies.
 
-Validado contra la única verdad disponible —el saldo propio— y coincide al euro. El
-tercer término, los movimientos posteriores, se lee del feed y aún está por implementar.
+El segundo sale de que cada jugador lleva su nivel de cláusula: subir un escalón cuesta el
+**20% del suelo**, con multiplicadores `[1,5 · 2 · 2,5 · 3 · 3,5 · 4]`. Se aplica el suelo
+de hoy, y como los valores suben, el gasto sale algo sobreestimado (0,6% medido contra el
+saldo propio); se afina solo según se acumule histórico del nivel diario.
+
+El tercero se lee de las tarjetas `card-transfer` del feed, que traen origen, destino e
+importe. Se guarda **toda** tarjeta con su HTML aunque no se reconozca el tipo: recién
+reiniciada una liga solo hay altas y avisos, y los tipos de compra y venta van apareciendo
+sobre la marcha. Cuando aparezca uno nuevo se reprocesa el histórico en vez de haberlo
+perdido — la misma razón por la que existe `raw_payload`.
 
 ## Raspberry Pi
 
@@ -75,6 +83,8 @@ fh mercado               # el mercado de hoy, por probabilidad de ser titular
 fh clausulas             # radar de cláusulas + a quién te conviene blindar
 fh clausulas --saldo 3000000
 fh saldos                # saldo estimado de cada rival
+fh movimientos           # fichajes, ventas y altas de la liga
+fh movimientos --tipos   # qué tipos de movimiento se han visto ya
 fh chollos               # libres y baratos que además van a jugar
 fh jugador pedri         # ficha con la evolución del valor
 fh liga                  # clasificación

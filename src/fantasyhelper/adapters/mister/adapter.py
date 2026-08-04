@@ -20,6 +20,7 @@ from fantasyhelper.adapters.mister.client import MisterClient
 from fantasyhelper.adapters.mister.endpoints import load_endpoints
 from fantasyhelper.adapters.mister.parsers import (
     MisterPlayer,
+    parse_feed,
     parse_player_search,
     parse_players,
     parse_standings,
@@ -520,9 +521,32 @@ class MisterAdapter:
 
         return total
 
+    def _store_feed(
+        self, conn: sqlite3.Connection, html: bytes, league_id: int | None
+    ) -> int:
+        nuevos = 0
+        for event in parse_feed(html):
+            if repo.record_feed_event(
+                conn,
+                league_id=league_id,
+                external_id=event.external_id,
+                kind=event.kind,
+                summary=event.summary,
+                html=event.html,
+                relative_time=event.relative_time,
+                player_ids=event.player_ids,
+                user_ids=event.user_ids,
+                amounts=event.amounts,
+            ):
+                nuevos += 1
+                log.debug("movimiento nuevo [%s] %s", event.kind, event.summary[:80])
+        return nuevos
+
     def _parse_into_db(
         self, conn: sqlite3.Connection, key: str, html: bytes, league_id: int | None
     ) -> int:
+        if key == "feed":
+            return self._store_feed(conn, html, league_id)
         if key == "search":
             return self._store_values(conn, parse_players(html))
         if key == "squad":

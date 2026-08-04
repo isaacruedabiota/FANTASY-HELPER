@@ -358,33 +358,88 @@ def liga() -> None:
 
 
 @app.command()
-def baseline(
-    fecha: str = typer.Argument(None, help="Dia del reinicio, AAAA-MM-DD. Por defecto hoy."),
+def movimientos(
+    tipo: str = typer.Option(None, help="Filtrar por tipo, p.ej. 'market' o 'join'."),
+    limite: int = typer.Option(25, help="Cuantos mostrar."),
+    tipos: bool = typer.Option(False, "--tipos", help="Solo el resumen por tipo."),
 ) -> None:
-    """Fija el día desde el que cuentan las cuentas de la liga.
+    """Movimientos de la liga: fichajes, ventas, cláusulas y altas.
 
-    Hay que ejecutarlo una vez tras crear o reiniciar la liga, con una captura
-    ya hecha de ese día. Es el ancla para estimar el saldo de los rivales.
+    Se guarda toda tarjeta del feed aunque no sepamos aún qué representa, para
+    no perder movimientos mientras se descubren los tipos.
     """
-    from fantasyhelper.storage.db import today, transaction
+    import json as _json
 
-    fecha = fecha or today()
     conn = connect()
     try:
-        tiene = conn.execute(
-            "SELECT COUNT(*) n FROM ownership_snapshot WHERE snapshot_date = ?", (fecha,)
-        ).fetchone()["n"]
-        if not tiene:
+        resumen = queries.feed_kinds(conn)
+        if not resumen:
             console.print(
-                f"[red]No hay ninguna captura de plantillas del {fecha}.[/red] "
-                "Ejecuta antes [bold]fh capturar --solo mister[/bold]."
+                "[yellow]Sin movimientos capturados.[/yellow] "
+                "Ejecuta [bold]fh capturar --solo mister[/bold]."
             )
-            raise typer.Exit(1)
-        with transaction(conn):
-            queries.set_baseline_date(conn, fecha)
+            return
+
+        if tipos:
+            table = Table(title="Tipos de movimiento vistos", header_style="bold",
+                          title_justify="left")
+            table.add_column("Tipo")
+            table.add_column("Nº", justify="right")
+            table.add_column("Desde")
+            table.add_column("Hasta")
+            for row in resumen:
+                table.add_row(row["kind"] or "?", str(row["n"]),
+                              (row["desde"] or "")[:10], (row["hasta"] or "")[:10])
+            console.print(table)
+            return
+
+        table = Table(title="Movimientos", header_style="bold", title_justify="left")
+        table.add_column("Visto", no_wrap=True)
+        table.add_column("Tipo", no_wrap=True)
+        table.add_column("Qué")
+        table.add_column("Importes", justify="right", no_wrap=True)
+        for row in queries.feed_events(conn, kind=tipo, limit=limite):
+            importes = _json.loads(row["amounts"] or "[]")
+            table.add_row(
+                (row["first_seen"] or "")[:10],
+                (row["kind"] or "?").removeprefix("card-"),
+                display.truncate(row["summary"].replace(" | ", " "), 60),
+                " ".join(display.money(i, short=True) for i in importes[:3]) or "",
+            )
+        console.print(table)
     finally:
         conn.close()
-    console.print(f"[green]Cuentas ancladas al {fecha}[/green] ({tiene} propiedades).")
+
+
+@app.command()
+def baseline() -> None:
+    """Congela el punto de partida de la liga para poder estimar saldos.
+
+    Ejecútalo tras crear o reiniciar la liga, con una captura recién hecha y
+    antes de que nadie fiche: guarda el valor de cada plantilla en ese instante,
+    que es el ancla de la que cuelga todo el cálculo de saldos.
+    """
+    from fantasyhelper.storage.db import transaction
+
+    conn = connect()
+    try:
+        anterior = queries.baseline_at(conn)
+        with transaction(conn):
+            n = queries.freeze_baseline(conn)
+        nuevo = queries.baseline_at(conn)
+    finally:
+        conn.close()
+
+    if not n:
+        console.print(
+            "[red]No hay plantillas capturadas.[/red] "
+            "Ejecuta antes [bold]fh capturar --solo mister[/bold]."
+        )
+        raise typer.Exit(1)
+
+    if anterior:
+        console.print(f"[yellow]Se reemplaza el punto de partida anterior[/yellow] ({anterior}).")
+    console.print(f"[green]Punto de partida congelado:[/green] {n} participantes, {nuevo}.")
 
 
 @app.command()
@@ -397,10 +452,10 @@ def saldos() -> None:
     """
     conn = connect()
     try:
-        if queries.baseline_date(conn) is None:
+        if queries.baseline_at(conn) is None:
             console.print(
-                "[yellow]Falta fijar el día de partida de la liga.[/yellow]\n"
-                "Tras crear o reiniciar la liga, con una captura hecha de ese día: "
+                "[yellow]Falta congelar el punto de partida de la liga.[/yellow]\n"
+                "Tras crear o reiniciarla, con una captura recién hecha: "
                 "[bold]fh baseline[/bold]"
             )
             return
@@ -416,7 +471,8 @@ def saldos() -> None:
         table = Table(title="Saldo estimado", header_style="bold", title_justify="left")
         table.add_column("Participante")
         table.add_column("Plantilla inicial", justify="right")
-        table.add_column("Gasto clausulas", justify="right")
+        table.add_column("Clausulas", justify="right")
+        table.add_column("Movimientos", justify="right")
         table.add_column("Saldo estimado", justify="right")
         table.add_column("Saldo real", justify="right")
         for row in filas:
@@ -430,15 +486,15 @@ def saldos() -> None:
             table.add_row(
                 nombre,
                 display.money(row["valor_inicial"]),
-                display.money(int(row["gasto_clausulas"])),
+                display.money(-int(row["gasto_clausulas"]) or None),
+                display.delta(row["movimientos"]) or "-",
                 display.money(int(row["saldo_estimado"])),
                 real,
             )
         console.print(table)
         console.print(
-            "\n[dim]La estimación parte de la primera captura tras el reinicio. "
-            "Compras y ventas posteriores aún no se descuentan: para eso hace "
-            "falta el registro del feed.[/dim]"
+            f"\n[dim]Punto de partida: {queries.baseline_at(conn)}. "
+            "Los movimientos posteriores salen del feed.[/dim]"
         )
     finally:
         conn.close()

@@ -9,6 +9,8 @@ de quien las llame.
 
 from __future__ import annotations
 
+import json
+import re
 import sqlite3
 
 #: Probabilidad supuesta cuando la fuente no dice nada del jugador.
@@ -300,25 +302,103 @@ INITIAL_BUDGET = 50_000_000
 
 #: Subir un escalon de clausula cuesta el 20% del suelo del jugador
 #: (listeners.js: cost = floor * 0.2 * (nivel_nuevo - nivel_actual)).
+#:
+#: Limitacion conocida: se aplica el suelo de HOY, pero cada subida se pago con
+#: el suelo que tuviera el jugador ese dia. Si su valor ha subido desde
+#: entonces, el gasto sale sobreestimado y el saldo, corto (0,6% medido contra
+#: el saldo real propio). Se resuelve solo segun se acumule historico: con el
+#: nivel capturado a diario se sabe el dia exacto de cada subida y se puede
+#: usar el suelo de ese dia.
 CLAUSE_STEP_COST_RATIO = 0.2
 
 
-def baseline_date(conn: sqlite3.Connection) -> str | None:
-    """Dia desde el que cuentan las cuentas de la liga.
-
-    Es el ancla de la estimacion de saldos y hay que fijarlo a mano tras crear o
-    reiniciar la liga (`fh baseline`). Deducirlo automaticamente seria adivinar,
-    y equivocarse aqui desplaza el saldo de todos los rivales.
-    """
+def baseline_at(conn: sqlite3.Connection) -> str | None:
+    """Instante en que se congelo el punto de partida de la liga, si se hizo."""
     row = conn.execute(
-        "SELECT baseline_date FROM league WHERE baseline_date IS NOT NULL "
-        "ORDER BY id DESC LIMIT 1"
+        "SELECT MIN(baseline_at) AS t FROM manager_baseline"
     ).fetchone()
-    return row["baseline_date"] if row else None
+    return row["t"] if row and row["t"] else None
 
 
-def set_baseline_date(conn: sqlite3.Connection, date: str) -> int:
-    return conn.execute("UPDATE league SET baseline_date = ?", (date,)).rowcount
+def freeze_baseline(conn: sqlite3.Connection) -> int:
+    """Congela el punto de partida: plantilla y gasto en clausulas de cada uno.
+
+    Se guarda el valor ya calculado en vez de una referencia al snapshot del
+    dia, porque los snapshots del dia en curso se reescriben en cada captura.
+    Hay que ejecutarlo tras crear o reiniciar la liga, antes de que nadie fiche.
+    """
+    from fantasyhelper.storage.db import utcnow
+
+    ahora = utcnow()
+    ultimo = conn.execute(
+        "SELECT MAX(snapshot_date) AS d FROM ownership_snapshot"
+    ).fetchone()["d"]
+    if not ultimo:
+        return 0
+
+    conn.execute("DELETE FROM manager_baseline")
+    return conn.execute(
+        """
+        INSERT INTO manager_baseline
+            (league_id, manager_id, baseline_at, squad_value, clause_spend)
+        SELECT o.league_id, o.manager_id, ?,
+               COALESCE(SUM(v.market_value), 0),
+               COALESCE(SUM(COALESCE(o.clause_level, 0) * o.clause_floor * ?), 0)
+        FROM ownership_snapshot o
+        LEFT JOIN player_value_snapshot v
+          ON v.player_id = o.player_id AND v.provider = 'mister'
+         AND v.source = 'mister' AND v.snapshot_date = o.snapshot_date
+        WHERE o.snapshot_date = ? AND o.manager_id IS NOT NULL
+        GROUP BY o.league_id, o.manager_id
+        """,
+        (ahora, CLAUSE_STEP_COST_RATIO, ultimo),
+    ).rowcount
+
+
+#: 'Thiago Almada | cambia de | Glok | a | Mister' -> origen y destino.
+TRANSFER_RE = re.compile(r"cambia de \| (?P<origen>.+?) \| a \| (?P<destino>.+?) \|")
+
+#: Como se llama el propio juego cuando compra o vende: no es un participante.
+SYSTEM_NAME = "mister"
+
+
+def feed_movements(conn: sqlite3.Connection, since: str) -> dict[str, int]:
+    """Variacion de saldo por participante segun el feed, desde una fecha.
+
+    Un traspaso mueve dinero en dos direcciones: quien entrega al jugador cobra
+    y quien lo recibe paga. Cuando una de las partes es el propio juego
+    ("Mister"), solo se mueve el saldo de la otra.
+
+    Se devuelve {nombre_participante: variacion} porque el feed identifica a los
+    participantes por su nombre visible, no por su id.
+    """
+    movimientos: dict[str, int] = {}
+
+    # Estrictamente posteriores al instante del ancla: lo anterior ya esta
+    # reflejado en las plantillas congeladas, y contarlo otra vez desplazaria el
+    # saldo el doble. Por eso el ancla es un instante y no una fecha.
+    for row in conn.execute(
+        "SELECT summary, amounts FROM feed_event "
+        "WHERE kind = 'card-transfer' AND first_seen > ?",
+        (since,),
+    ):
+        match = TRANSFER_RE.search(row["summary"] or "")
+        if not match:
+            continue
+        importes = json.loads(row["amounts"] or "[]")
+        if not importes:
+            continue
+        # El importe de la operacion es el ultimo numero de la tarjeta; los
+        # anteriores son puntos y otros adornos.
+        importe = importes[-1]
+
+        origen, destino = match.group("origen").strip(), match.group("destino").strip()
+        if origen.lower() != SYSTEM_NAME:
+            movimientos[origen] = movimientos.get(origen, 0) + importe
+        if destino.lower() != SYSTEM_NAME:
+            movimientos[destino] = movimientos.get(destino, 0) - importe
+
+    return movimientos
 
 
 def estimated_balances(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -338,32 +418,19 @@ def estimated_balances(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     Se devuelve tambien el saldo real cuando se conoce (el propio), para poder
     contrastar la estimacion contra la verdad.
     """
-    base = baseline_date(conn)
+    base = baseline_at(conn)
     if base is None:
         return []
 
-    return conn.execute(
+    movimientos = feed_movements(conn, base)
+
+    filas = conn.execute(
         """
-        WITH primera AS (
-            SELECT ? AS d
-        ),
-        ultima AS (
-            SELECT MAX(snapshot_date) AS d FROM ownership_snapshot
-        ),
-        plantilla_inicial AS (
-            SELECT o.manager_id, SUM(v.market_value) AS valor
-            FROM ownership_snapshot o
-            JOIN player_value_snapshot v
-              ON v.player_id = o.player_id AND v.provider = 'mister'
-             AND v.snapshot_date = o.snapshot_date AND v.source = 'mister'
-            WHERE o.snapshot_date = (SELECT d FROM primera)
-            GROUP BY o.manager_id
-        ),
-        gasto_clausulas AS (
+        WITH clausulas_hoy AS (
             SELECT o.manager_id,
                    SUM(COALESCE(o.clause_level, 0) * o.clause_floor * ?) AS gasto
             FROM ownership_snapshot o
-            WHERE o.snapshot_date = (SELECT d FROM ultima)
+            WHERE o.snapshot_date = (SELECT MAX(snapshot_date) FROM ownership_snapshot)
               AND o.clause_floor IS NOT NULL
             GROUP BY o.manager_id
         ),
@@ -375,18 +442,51 @@ def estimated_balances(conn: sqlite3.Connection) -> list[sqlite3.Row]:
             FROM manager_snapshot WHERE balance IS NOT NULL
         )
         SELECT m.id, m.name, m.is_me,
-               pi.valor AS valor_inicial,
-               COALESCE(gc.gasto, 0) AS gasto_clausulas,
-               ? - COALESCE(pi.valor, 0) - COALESCE(gc.gasto, 0) AS saldo_estimado,
+               b.squad_value AS valor_inicial,
+               -- El gasto en clausulas cuenta entero, no como incremento sobre
+               -- el ancla: un reinicio deja todos los niveles a cero, asi que
+               -- todo lo que hay ahora se ha pagado despues del reinicio.
+               COALESCE(ch.gasto, 0) AS gasto_clausulas,
+               ? - b.squad_value - COALESCE(ch.gasto, 0) AS saldo_estimado,
                sr.balance AS saldo_real
-        FROM manager m
-        LEFT JOIN plantilla_inicial pi ON pi.manager_id = m.id
-        LEFT JOIN gasto_clausulas gc ON gc.manager_id = m.id
+        FROM manager_baseline b
+        JOIN manager m ON m.id = b.manager_id
+        LEFT JOIN clausulas_hoy ch ON ch.manager_id = m.id
         LEFT JOIN saldo_real sr ON sr.manager_id = m.id AND sr.rn = 1
-        WHERE pi.valor IS NOT NULL
-        ORDER BY saldo_estimado DESC
         """,
-        (base, CLAUSE_STEP_COST_RATIO, INITIAL_BUDGET),
+        (CLAUSE_STEP_COST_RATIO, INITIAL_BUDGET),
+    ).fetchall()
+
+    resultado = []
+    for fila in filas:
+        datos = dict(fila)
+        datos["movimientos"] = movimientos.get(fila["name"], 0)
+        datos["saldo_estimado"] = fila["saldo_estimado"] + datos["movimientos"]
+        resultado.append(datos)
+
+    resultado.sort(key=lambda f: f["saldo_estimado"], reverse=True)
+    return resultado
+
+
+def feed_events(
+    conn: sqlite3.Connection, *, kind: str | None = None, limit: int = 30
+) -> list[sqlite3.Row]:
+    """Movimientos de la liga, del mas reciente al mas antiguo."""
+    sql = "SELECT * FROM feed_event"
+    params: list[object] = []
+    if kind:
+        sql += " WHERE kind LIKE ?"
+        params.append(f"%{kind}%")
+    sql += " ORDER BY first_seen DESC, id DESC LIMIT ?"
+    params.append(limit)
+    return conn.execute(sql, params).fetchall()
+
+
+def feed_kinds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Tipos de movimiento vistos hasta ahora y cuantos hay de cada uno."""
+    return conn.execute(
+        "SELECT kind, COUNT(*) n, MIN(first_seen) desde, MAX(first_seen) hasta "
+        "FROM feed_event GROUP BY kind ORDER BY n DESC"
     ).fetchall()
 
 
