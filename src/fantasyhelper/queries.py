@@ -257,6 +257,24 @@ def free_agents(
     ).fetchall()
 
 
+def all_players(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Todos los jugadores con valor conocido, con su dueno si lo tienen.
+
+    Es la base sobre la que trabaja el modelo de puntos esperados, que necesita
+    mirar a toda la liga y no solo a una plantilla o al mercado del dia.
+    """
+    return conn.execute(
+        f"""
+        {OWNERSHIP_CTES}
+        SELECT {PLAYER_COLUMNS}, o.clause_value, m.name AS owner
+        {PLAYER_JOINS}
+        LEFT JOIN latest_ownership o ON o.player_id = p.id AND o.rn = 1
+        LEFT JOIN manager m ON m.id = o.manager_id
+        WHERE v.market_value IS NOT NULL
+        """
+    ).fetchall()
+
+
 def find_players(conn: sqlite3.Connection, term: str) -> list[sqlite3.Row]:
     """Busca jugadores por nombre, incluyendo como los llama cada fuente."""
     like = f"%{term}%"

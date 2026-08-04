@@ -29,6 +29,7 @@ Los enlaces del paso 3 se marcan con confianza 0.7 para poder revisarlos con
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -122,11 +123,97 @@ def infer_team_mapping(conn: sqlite3.Connection) -> dict[int, int]:
 
 
 def merge_team(conn: sqlite3.Connection, source_id: int, target_id: int) -> None:
-    """Absorbe un equipo dentro de otro y borra el sobrante."""
+    """Absorbe un equipo dentro de otro y borra el sobrante.
+
+    Hay que repuntar TODAS las tablas que referencian al equipo antes de
+    borrarlo, o la clave foranea aborta el borrado. En el calendario, ademas,
+    los dos equipos pueden tener ya la misma jornada registrada -es el mismo
+    partido visto dos veces-, y ahi 'OR REPLACE' se queda con una sola fila.
+    """
     conn.execute("UPDATE player SET team_id = ? WHERE team_id = ?", (target_id, source_id))
     conn.execute("UPDATE player_alias SET team_id = ? WHERE team_id = ?", (target_id, source_id))
     conn.execute("UPDATE team_alias SET team_id = ? WHERE team_id = ?", (target_id, source_id))
+    conn.execute(
+        "UPDATE player_season_stat SET team_id = ? WHERE team_id = ?", (target_id, source_id)
+    )
+    for lado in ("home_team_id", "away_team_id"):
+        conn.execute(
+            f"UPDATE OR REPLACE fixture SET {lado} = ? WHERE {lado} = ?",
+            (target_id, source_id),
+        )
     conn.execute("DELETE FROM team WHERE id = ?", (source_id,))
+
+
+def _has_players(conn: sqlite3.Connection, team_id: int) -> bool:
+    return bool(
+        conn.execute(
+            "SELECT 1 FROM player WHERE team_id = ? LIMIT 1", (team_id,)
+        ).fetchone()
+    )
+
+
+def link_team_alias(
+    conn: sqlite3.Connection, *, provider: str, external_id: str, team_id: int
+) -> None:
+    """Apunta el equipo de una fuente al equipo canonico, absorbiendo el anterior.
+
+    Es la forma fiable de saber que equipo es cada numero de Mister: en la ficha
+    de un jugador vienen a la vez su equipo segun Mister y el jugador, cuyo
+    equipo canonico ya conocemos por el crosswalk.
+
+    Si el alias apuntaba a otro equipo y ese otro no tiene jugadores, era un
+    duplicado creado a partir del nombre ('Athletic Club' frente a 'Athletic')
+    y se fusiona aqui mismo. Sin esto los duplicados se acumulan y el calendario
+    acaba con el mismo partido dos veces.
+    """
+    fila = conn.execute(
+        "SELECT team_id FROM team_alias WHERE provider = ? AND external_id = ?",
+        (provider, str(external_id)),
+    ).fetchone()
+
+    anterior = fila["team_id"] if fila else None
+    if anterior is not None and anterior != team_id and not _has_players(conn, anterior):
+        merge_team(conn, anterior, team_id)
+
+    conn.execute(
+        "INSERT INTO team_alias (team_id, provider, external_id) VALUES (?, ?, ?) "
+        "ON CONFLICT (provider, external_id) DO UPDATE SET team_id = excluded.team_id",
+        (team_id, provider, str(external_id)),
+    )
+
+
+#: Nombre provisional que se le pone a un equipo del que solo sabemos el numero.
+PLACEHOLDER_TEAM_RE = re.compile(r"^mister-team-(\d+)$")
+
+
+def merge_placeholder_teams(conn: sqlite3.Connection) -> int:
+    """Absorbe los equipos que solo tenian numero dentro de los que ya tienen nombre.
+
+    Durante un tiempo el unico dato de equipo que daban las paginas de jugadores
+    era un numero, y se creaba un equipo llamado 'mister-team-9' a la espera de
+    cruzarlo con FutbolFantasy. La ficha del jugador si trae el nombre, asi que
+    ahora el alias de ese numero apunta al equipo de verdad y el marcador sobra.
+
+    No hace falta deducir nada: el propio nombre lleva el numero, y el alias de
+    ese numero dice cual es el equipo bueno.
+    """
+    fusionados = 0
+    for team in conn.execute(
+        "SELECT id, slug FROM team WHERE slug LIKE 'mister-team-%'"
+    ).fetchall():
+        match = PLACEHOLDER_TEAM_RE.match(team["slug"])
+        if not match:
+            continue
+        alias = conn.execute(
+            "SELECT team_id FROM team_alias WHERE provider = 'mister' AND external_id = ?",
+            (match.group(1),),
+        ).fetchone()
+        # Si el alias sigue apuntando al propio marcador es que aun no sabemos
+        # como se llama ese equipo; se queda como esta.
+        if alias and alias["team_id"] != team["id"]:
+            merge_team(conn, team["id"], alias["team_id"])
+            fusionados += 1
+    return fusionados
 
 
 def link_remaining(conn: sqlite3.Connection) -> tuple[int, int]:
@@ -211,6 +298,10 @@ def _absorb_player(conn: sqlite3.Connection, *, source_id: int, target_id: int) 
 def reconcile(conn: sqlite3.Connection) -> ReconcileReport:
     """Unifica equipos y jugadores entre fuentes. Idempotente."""
     report = ReconcileReport()
+
+    # Primero los que se resuelven solos por el nombre que da la ficha, y
+    # despues los que hay que deducir votando con jugadores ya cruzados.
+    report.teams_merged = merge_placeholder_teams(conn)
 
     mapping = infer_team_mapping(conn)
     for source_id, target_id in mapping.items():

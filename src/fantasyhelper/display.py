@@ -67,6 +67,12 @@ def difficulty(value: int | None) -> str:
     return f"[{color}]{value}[/{color}]"
 
 
+#: Anchos pensados para que quince jugadores quepan en un terminal de 80 columnas
+#: sin que rich parta las filas en varias lineas, que las vuelve ilegibles.
+NAME_WIDTH = 18
+TEAM_WIDTH = 9
+
+
 def column(row: sqlite3.Row, name: str, default: object = None) -> object:
     """Lee una columna que puede no estar en el SELECT. sqlite3.Row no tiene .get()."""
     return row[name] if name in set(row.keys()) else default
@@ -81,7 +87,21 @@ def opponent(row: sqlite3.Row) -> str:
     if not name:
         return "-"
     where = "" if column(row, "is_home") else "@"
-    return f"{where}{name}·{difficulty(column(row, 'opponent_difficulty'))}"
+    nivel = column(row, "opponent_difficulty")
+    # El calendario da el rival aunque no sepamos su dificultad; en ese caso se
+    # omite el sufijo en vez de escribir un guion que no dice nada.
+    sufijo = f"·{difficulty(nivel)}" if nivel is not None else ""
+    return f"{where}{truncate(name, TEAM_WIDTH)}{sufijo}"
+
+
+def points(value: float | None) -> str:
+    """Puntos esperados. Un decimal: mas precision seria fingir exactitud."""
+    return "-" if value is None else f"{value:.1f}"
+
+
+def cost_per_point(value: float | None) -> str:
+    """Euros por punto esperado, en corto. Es la cifra que compara de verdad."""
+    return "-" if value is None else money(value, short=True)
 
 
 def truncate(text: str | None, width: int) -> str:
@@ -102,12 +122,6 @@ def sparkline(values: list[int]) -> str:
         SPARK_CHARS[min(int((v - low) / span * len(SPARK_CHARS)), len(SPARK_CHARS) - 1)]
         for v in values
     )
-
-
-#: Anchos pensados para que quince jugadores quepan en un terminal de 80 columnas
-#: sin que rich parta las filas en varias lineas, que las vuelve ilegibles.
-NAME_WIDTH = 18
-TEAM_WIDTH = 9
 
 
 def player_table(title: str, *, extra: tuple[str, ...] = ()) -> Table:

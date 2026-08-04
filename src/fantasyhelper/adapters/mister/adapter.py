@@ -13,17 +13,23 @@ una diferencia de 4.000 € en Mbappe entre ambas fuentes el mismo dia).
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 
+from fantasyhelper import reconcile
 from fantasyhelper.adapters.mister.client import MisterClient
 from fantasyhelper.adapters.mister.endpoints import load_endpoints
 from fantasyhelper.adapters.mister.parsers import (
     MisterPlayer,
     parse_feed,
+    parse_matchday_points,
+    parse_next_fixture,
     parse_player_search,
     parse_players,
+    parse_season_history,
     parse_standings,
+    parse_team_names,
     parse_user_config,
     parse_user_squad,
     parse_value_history,
@@ -31,6 +37,7 @@ from fantasyhelper.adapters.mister.parsers import (
 from fantasyhelper.config import settings
 from fantasyhelper.storage import repository as repo
 from fantasyhelper.storage.db import transaction
+from fantasyhelper.storage.raw import iter_raw
 from fantasyhelper.utils.names import slugify
 
 log = logging.getLogger(__name__)
@@ -81,9 +88,17 @@ class MisterAdapter:
     def _player_id(self, conn: sqlite3.Connection, player: MisterPlayer) -> int:
         team_id = None
         if player.team_external_id:
-            # Mister identifica los equipos por numero, sin darnos el nombre en
-            # estas paginas. Se registra con el id como nombre provisional; el
-            # crosswalk lo unifica con el nombre real que si da FutbolFantasy.
+            # Estas paginas dan el equipo por numero, sin nombre. Si ya sabemos
+            # a que equipo corresponde ese numero -por la ficha del jugador, que
+            # si trae el nombre, o por el crosswalk- se reutiliza.
+            #
+            # Reutilizarlo no es una optimizacion: crear aqui un equipo nuevo
+            # llamado 'mister-team-9' reescribia el alias y deshacia en cada
+            # captura la unificacion que hubiera hecho `fh reconciliar`.
+            team_id = repo.team_id_for_alias(
+                conn, provider=self.provider, external_id=player.team_external_id
+            )
+        if team_id is None and player.team_external_id:
             team_id = repo.upsert_team(
                 conn,
                 name=f"mister-team-{player.team_external_id}",
@@ -314,22 +329,151 @@ class MisterAdapter:
                 break
         return total
 
+    def store_player_card(
+        self, conn: sqlite3.Connection, payload: dict, player_id: int
+    ) -> dict[str, int]:
+        """Vuelca todo lo que trae la ficha de un jugador.
+
+        La ficha es con diferencia la respuesta mas rica de Mister y durante un
+        tiempo solo se le saco el grafico de valores. Ademas de eso trae el
+        rendimiento de hasta cinco temporadas, los puntos por jornada de la
+        actual y el proximo partido con sede y hora, que es de donde sale el
+        calendario. Se guarda todo de una vez porque la peticion ya esta hecha.
+        """
+        escrito = {"valores": 0, "temporadas": 0, "jornadas": 0, "partidos": 0}
+
+        # Lo primero, porque todo lo demas resuelve equipos por alias: aqui es
+        # donde 'mister-team-9' pasa a llamarse Sevilla.
+        #
+        # El equipo del propio jugador se trata aparte y manda sobre el resto:
+        # sabemos a la vez que numero le da Mister y cual es su equipo canonico,
+        # asi que el enlace es directo y no hay que fiarse del nombre. Para los
+        # rivales del proximo partido solo tenemos el nombre, que basta para
+        # crearlos pero puede escribirse distinto en cada fuente.
+        nombres = parse_team_names(payload)
+        equipo = ((payload.get("data") or {}).get("player") or {}).get("team") or {}
+        propio = str(equipo["id"]) if equipo.get("id") is not None else None
+        canonico = conn.execute(
+            "SELECT team_id FROM player WHERE id = ?", (player_id,)
+        ).fetchone()
+
+        if propio and canonico and canonico["team_id"]:
+            reconcile.link_team_alias(
+                conn, provider=self.provider,
+                external_id=propio, team_id=canonico["team_id"],
+            )
+            if nombres.get(propio):
+                repo.rename_team(conn, team_id=canonico["team_id"], name=nombres[propio])
+
+        for external_id, name in nombres.items():
+            if external_id == propio:
+                continue
+            if repo.team_id_for_alias(
+                conn, provider=self.provider, external_id=external_id
+            ) is None:
+                repo.upsert_team(
+                    conn, name=name, provider=self.provider, external_id=external_id
+                )
+
+        for date, value in parse_value_history(payload):
+            repo.record_player_value(
+                conn, provider=self.provider, source=self.provider,
+                player_id=player_id, market_value=value, snapshot_date=date,
+            )
+            escrito["valores"] += 1
+
+        for stat in parse_season_history(payload):
+            team_id = None
+            if stat.team_external_id:
+                team_id = repo.team_id_for_alias(
+                    conn, provider=self.provider, external_id=stat.team_external_id
+                )
+            repo.record_season_stat(
+                conn, provider=self.provider, player_id=player_id,
+                season=stat.season, points=stat.points,
+                avg_points=stat.avg_points, matches_played=stat.matches_played,
+                team_id=team_id,
+            )
+            escrito["temporadas"] += 1
+
+        for matchday, points in parse_matchday_points(payload):
+            repo.record_player_points(
+                conn, provider=self.provider, player_id=player_id,
+                season=settings.season, matchday=matchday, points=points,
+            )
+            escrito["jornadas"] += 1
+
+        if (fixture := parse_next_fixture(payload)) is not None:
+            home = repo.team_id_for_alias(
+                conn, provider=self.provider, external_id=fixture.home_external_id
+            )
+            away = repo.team_id_for_alias(
+                conn, provider=self.provider, external_id=fixture.away_external_id
+            )
+            # Solo si ambos equipos ya estan en el crosswalk; si no, el partido
+            # se recogera en la siguiente captura, cuando el catalogo los traiga.
+            if home and away:
+                repo.upsert_fixture(
+                    conn, season=settings.season, matchday=fixture.matchday,
+                    home_team_id=home, away_team_id=away,
+                    kickoff_utc=fixture.kickoff_utc,
+                )
+                escrito["partidos"] += 1
+
+        return escrito
+
+    def reprocess_cards(self, conn: sqlite3.Connection) -> tuple[int, dict[str, int]]:
+        """Relee las fichas ya descargadas y extrae lo que en su dia no se guardo.
+
+        Esta es la razon de guardar el crudo. Las fichas se bajaron para sacar
+        el grafico de valores, y traian ademas el rendimiento por temporada y
+        el calendario; recuperarlo ahora no cuesta ni una peticion.
+        """
+        alias = {
+            fila["external_id"]: fila["player_id"]
+            for fila in conn.execute(
+                "SELECT external_id, player_id FROM player_alias WHERE provider = 'mister'"
+            )
+        }
+
+        procesadas = 0
+        total = {"valores": 0, "temporadas": 0, "jornadas": 0, "partidos": 0}
+        for _, endpoint, content in iter_raw(
+            conn, source=self.provider, endpoint_like="ajax/players/%"
+        ):
+            player_id = alias.get(endpoint.rsplit("/", 1)[-1])
+            if player_id is None:
+                continue
+            try:
+                payload = json.loads(content)
+            except ValueError:
+                log.warning("ficha ilegible en %s", endpoint)
+                continue
+
+            with transaction(conn):
+                escrito = self.store_player_card(conn, payload, player_id)
+            procesadas += 1
+            for clave, valor in escrito.items():
+                total[clave] += valor
+
+        return procesadas, total
+
     def backfill_values(
         self,
         conn: sqlite3.Connection,
         *,
         limit: int | None = None,
         skip_done: bool = True,
-    ) -> tuple[int, int]:
-        """Recupera el historico de valor de mercado que publica Mister.
+    ) -> tuple[int, dict[str, int]]:
+        """Recorre la ficha de cada jugador y guarda todo lo que trae.
 
-        Una peticion por jugador, asi que es lento y se ejecuta una sola vez.
-        Es reanudable: por defecto salta a los que ya tienen historico, de modo
-        que si se corta a la mitad basta con volver a lanzarlo.
+        Una peticion por jugador, asi que es lento. Es reanudable: por defecto
+        salta a los que ya tienen historico, de modo que si se corta a la mitad
+        basta con volver a lanzarlo.
 
-        Devuelve (jugadores procesados, filas escritas).
+        Devuelve (jugadores procesados, filas escritas por concepto).
         """
-        # Solo se puede pedir el historico de jugadores de los que conocemos su
+        # Solo se puede pedir la ficha de los jugadores de los que conocemos su
         # id en Mister, que son los que han aparecido en catalogo, mercado o
         # alguna plantilla.
         sql = """
@@ -339,21 +483,29 @@ class MisterAdapter:
             WHERE a.provider = 'mister'
         """
         if skip_done:
-            # "Ya tiene historico" = tiene valores de dias anteriores a hoy.
+            # "Ya esta hecho" = tiene valores de dias anteriores a hoy Y consta
+            # su rendimiento por temporada. Lo segundo empezo a guardarse
+            # despues, asi que sin ello los ya descargados quedarian fuera.
             sql += """
-              AND NOT EXISTS (
-                SELECT 1 FROM player_value_snapshot v
-                WHERE v.player_id = a.player_id AND v.provider = 'mister'
-                  AND v.snapshot_date < date('now'))
+              AND NOT (
+                EXISTS (
+                  SELECT 1 FROM player_value_snapshot v
+                  WHERE v.player_id = a.player_id AND v.provider = 'mister'
+                    AND v.snapshot_date < date('now'))
+                AND EXISTS (
+                  SELECT 1 FROM player_season_stat s
+                  WHERE s.player_id = a.player_id AND s.provider = 'mister')
+              )
             """
         sql += " ORDER BY p.name"
         if limit:
             sql += f" LIMIT {int(limit)}"
 
         targets = conn.execute(sql).fetchall()
-        log.info("historico pendiente para %d jugadores", len(targets))
+        log.info("ficha pendiente para %d jugadores", len(targets))
 
-        processed = rows = 0
+        processed = 0
+        total = {"valores": 0, "temporadas": 0, "jornadas": 0, "partidos": 0}
         for target in targets:
             payload = self.client.fetch_json(
                 conn,
@@ -366,22 +518,17 @@ class MisterAdapter:
             if not payload:
                 continue
 
-            history = parse_value_history(payload)
             with transaction(conn):
-                for date, value in history:
-                    repo.record_player_value(
-                        conn,
-                        provider=self.provider,
-                        source=self.provider,
-                        player_id=target["player_id"],
-                        market_value=value,
-                        snapshot_date=date,
-                    )
+                escrito = self.store_player_card(conn, payload, target["player_id"])
             processed += 1
-            rows += len(history)
-            log.info("  %-26s %d dias de historico", target["name"][:26], len(history))
+            for clave, valor in escrito.items():
+                total[clave] += valor
+            log.info(
+                "  %-26s %d dias, %d temporadas",
+                target["name"][:26], escrito["valores"], escrito["temporadas"],
+            )
 
-        return processed, rows
+        return processed, total
 
     def _store_standings(
         self, conn: sqlite3.Connection, html: bytes, league_id: int

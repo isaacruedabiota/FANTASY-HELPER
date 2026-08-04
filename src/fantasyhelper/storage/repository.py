@@ -449,6 +449,90 @@ def record_player_points(
     )
 
 
+def record_season_stat(
+    conn: sqlite3.Connection,
+    *,
+    provider: str,
+    player_id: int,
+    season: str,
+    points: int | None,
+    avg_points: float | None,
+    matches_played: int | None,
+    team_id: int | None = None,
+) -> None:
+    """Guarda el rendimiento de un jugador en una temporada.
+
+    Se reescribe en cada lectura porque la temporada en curso sigue creciendo;
+    las pasadas ya no cambian y el UPDATE es inofensivo.
+    """
+    conn.execute(
+        """
+        INSERT INTO player_season_stat
+            (provider, player_id, season, points, avg_points, matches_played,
+             team_id, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (provider, player_id, season) DO UPDATE SET
+            points = excluded.points,
+            avg_points = excluded.avg_points,
+            matches_played = excluded.matches_played,
+            team_id = COALESCE(excluded.team_id, player_season_stat.team_id),
+            updated_at = excluded.updated_at
+        """,
+        (provider, player_id, season, points, avg_points, matches_played,
+         team_id, utcnow()),
+    )
+
+
+def rename_team(conn: sqlite3.Connection, *, team_id: int, name: str) -> None:
+    """Le pone nombre de verdad a un equipo que solo tenia un numero.
+
+    Solo actua sobre los provisionales: si el equipo ya tiene un nombre puesto
+    por otra fuente se respeta, porque cambiarlo desharia el cruce por slug que
+    ya se hizo con ese nombre.
+    """
+    conn.execute(
+        "UPDATE team SET name = ? WHERE id = ? AND slug LIKE 'mister-team-%'",
+        (name, team_id),
+    )
+
+
+def team_id_for_alias(
+    conn: sqlite3.Connection, *, provider: str, external_id: str
+) -> int | None:
+    """Equipo canonico a partir del id que usa una fuente, si ya se conoce."""
+    row = conn.execute(
+        "SELECT team_id FROM team_alias WHERE provider = ? AND external_id = ?",
+        (provider, str(external_id)),
+    ).fetchone()
+    return row["team_id"] if row else None
+
+
+def upsert_fixture(
+    conn: sqlite3.Connection,
+    *,
+    season: str,
+    matchday: int,
+    home_team_id: int,
+    away_team_id: int,
+    kickoff_utc: str | None = None,
+) -> int:
+    """Registra un partido del calendario. Idempotente por jornada y rivales."""
+    conn.execute(
+        """
+        INSERT INTO fixture (season, matchday, home_team_id, away_team_id, kickoff_utc)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (season, matchday, home_team_id, away_team_id) DO UPDATE SET
+            kickoff_utc = COALESCE(excluded.kickoff_utc, fixture.kickoff_utc)
+        """,
+        (season, matchday, home_team_id, away_team_id, kickoff_utc),
+    )
+    return conn.execute(
+        "SELECT id FROM fixture WHERE season = ? AND matchday = ? "
+        "AND home_team_id = ? AND away_team_id = ?",
+        (season, matchday, home_team_id, away_team_id),
+    ).fetchone()["id"]
+
+
 # --------------------------------------------------------------------------
 # Trazabilidad del job
 # --------------------------------------------------------------------------

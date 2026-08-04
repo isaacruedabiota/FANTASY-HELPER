@@ -28,6 +28,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from bs4 import BeautifulSoup, Tag
 
@@ -84,6 +85,29 @@ class MisterManager:
     points: int | None = None
     team_value: int | None = None
     squad_size: int | None = None
+
+
+@dataclass
+class SeasonStat:
+    """Lo que rindio un jugador en una temporada pasada."""
+
+    season: str                 # '2025-26'
+    points: int
+    avg_points: float
+    #: Partidos que DISPUTO, que no es lo mismo que jornadas de la temporada.
+    matches_played: int
+    team_external_id: str | None = None
+
+
+@dataclass
+class MisterFixture:
+    """Un partido del calendario, con sede y jornada."""
+
+    external_id: str
+    matchday: int
+    home_external_id: str
+    away_external_id: str
+    kickoff_utc: str | None = None
 
 
 def parse_money(text: str | None) -> int | None:
@@ -385,6 +409,147 @@ def parse_value_history(payload: dict) -> list[tuple[str, int]]:
         if value is not None and date:
             history.append((date, value))
     return history
+
+
+#: '25/26' -> '2025-26'. Mister abrevia el ano a dos digitos en el historico
+#: pero lo escribe entero en todas partes; se normaliza aqui para que la
+#: temporada sea comparable con la que trae la configuracion.
+def normalize_season(raw: str) -> str | None:
+    match = re.fullmatch(r"(\d{2})/(\d{2})", raw.strip())
+    if not match:
+        return None
+    return f"20{match.group(1)}-{match.group(2)}"
+
+
+def parse_season_history(payload: dict) -> list[SeasonStat]:
+    """Rendimiento por temporada, de la mas reciente a la mas antigua.
+
+    Es lo unico del pasado que Mister entrega de golpe: hasta cinco temporadas
+    con puntos totales, media por jornada y el equipo en el que estuvo. Sin esto
+    no hay forma de estimar nada antes de que se juegue la primera jornada.
+    """
+    stats: list[SeasonStat] = []
+
+    for entry in (payload.get("data") or {}).get("points_history") or []:
+        season = normalize_season(str(entry.get("season", "")))
+        points = _as_int(entry.get("points"))
+        if season is None or points is None:
+            continue
+
+        # Los partidos disputados hay que deducirlos: Mister no los publica.
+        #
+        # 'last_gameweek' NO sirve, aunque lo parezca. Es la ultima jornada de
+        # la temporada, no las que jugo el jugador: Iker Luque figuraba con 12
+        # puntos, media 12,0 y last_gameweek 34, y lo que hizo fue jugar UN
+        # partido. Tomandolo por 34 partidos, su media de 12 parecia solida y
+        # se colaba en cabeza de cualquier ranking.
+        #
+        # La division si es exacta, porque la media que da Mister es por partido
+        # disputado: 179 puntos con media 5,4242 son 33 partidos justos.
+        avg = entry.get("avg")
+        avg_points = float(avg) if isinstance(avg, (int, float)) else 0.0
+        # Media cero no permite dividir. En la practica es quien no llego a
+        # debutar, asi que cero partidos es tambien la lectura correcta.
+        matches = round(points / avg_points) if avg_points else 0
+
+        stats.append(
+            SeasonStat(
+                season=season,
+                points=points,
+                avg_points=avg_points,
+                matches_played=matches,
+                team_external_id=_str_or_none(entry.get("id_team")),
+            )
+        )
+    return stats
+
+
+def parse_team_names(payload: dict) -> dict[str, str]:
+    """{id de equipo en Mister: nombre real}, de lo que caiga en la ficha.
+
+    Importa mas de lo que parece. Las paginas de jugadores solo dan el numero
+    del equipo, asi que hasta ahora se registraban como 'mister-team-9' y hacia
+    falta cruzarlos con FutbolFantasy para ponerles nombre. La ficha si trae el
+    nombre, tanto del equipo del jugador como de los dos del proximo partido,
+    de modo que el equipo queda identificado sin depender de la otra fuente.
+    """
+    data = payload.get("data") or {}
+    names: dict[str, str] = {}
+
+    team = (data.get("player") or {}).get("team") or {}
+    if (team_id := _str_or_none(team.get("id"))) and team.get("name"):
+        names[team_id] = str(team["name"])
+
+    for match in (data.get("next_match") or {}).values():
+        if not isinstance(match, dict):
+            continue
+        for lado in ("home", "away"):
+            side_id = _str_or_none(match.get(f"id_{lado}"))
+            if side_id and match.get(lado):
+                names[side_id] = str(match[lado])
+
+    return names
+
+
+def _matchday_numbers(payload: dict) -> dict[str, int]:
+    """{id de jornada -> numero}. El calendario numera, el partido solo referencia."""
+    numbers: dict[str, int] = {}
+    for entry in (payload.get("data") or {}).get("points") or []:
+        number = _as_int(entry.get("number"))
+        if entry.get("id") is not None and number is not None:
+            numbers[str(entry["id"])] = number
+    return numbers
+
+
+def parse_next_fixture(payload: dict) -> MisterFixture | None:
+    """Proximo partido del jugador, con local, visitante y hora.
+
+    Es la unica parte del calendario que llega completa: el resto de jornadas
+    solo dicen contra quien se juega, no donde. Como se captura a diario, el
+    calendario se va rellenando jornada a jornada por si solo.
+    """
+    matches = (payload.get("data") or {}).get("next_match") or {}
+    if not isinstance(matches, dict) or not matches:
+        return None
+    match = next(iter(matches.values()))
+    if not isinstance(match, dict):
+        return None
+
+    home = _str_or_none(match.get("id_home"))
+    away = _str_or_none(match.get("id_away"))
+    external_id = _str_or_none(match.get("id_match"))
+    matchday = _matchday_numbers(payload).get(str(match.get("id_gameweek")))
+    if not (home and away and external_id and matchday):
+        return None
+
+    kickoff = None
+    timestamp = _as_int((match.get("date") or {}).get("ts"))
+    if timestamp:
+        kickoff = datetime.fromtimestamp(timestamp, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    return MisterFixture(
+        external_id=external_id,
+        matchday=matchday,
+        home_external_id=home,
+        away_external_id=away,
+        kickoff_utc=kickoff,
+    )
+
+
+def parse_matchday_points(payload: dict) -> list[tuple[int, int]]:
+    """Puntos por jornada de la temporada en curso: [(jornada, puntos)].
+
+    Vacio mientras no se haya jugado nada. Segun avance la temporada esto va
+    sustituyendo al historico por temporada como base de la estimacion, porque
+    dice lo que rinde el jugador AHORA y no hace dos anos.
+    """
+    rows: list[tuple[int, int]] = []
+    for entry in (payload.get("data") or {}).get("points") or []:
+        number = _as_int(entry.get("number"))
+        points = _as_int((entry.get("points") or {}).get("points"))
+        if number is not None and points is not None:
+            rows.append((number, points))
+    return rows
 
 
 def _as_int(value: object) -> int | None:

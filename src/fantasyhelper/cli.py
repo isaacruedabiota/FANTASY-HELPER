@@ -73,6 +73,25 @@ def estado() -> None:
             )
         console.print(table)
 
+        # Lo que alimenta a xPts no va por dias, sino por cobertura: de cuantos
+        # jugadores sabemos algo y hasta que jornada llega el calendario.
+        base = conn.execute(
+            """
+            SELECT (SELECT COUNT(DISTINCT player_id) FROM player_season_stat) AS con_historico,
+                   (SELECT COUNT(*) FROM player) AS jugadores,
+                   (SELECT COUNT(*) FROM fixture) AS partidos,
+                   (SELECT MAX(matchday) FROM fixture) AS ultima_jornada,
+                   (SELECT COUNT(*) FROM player_points) AS jornadas_jugadas
+            """
+        ).fetchone()
+        console.print(
+            f"\n[bold]Base de puntos esperados[/bold]\n"
+            f"  Historico por temporada  {base['con_historico']} de {base['jugadores']} jugadores\n"
+            f"  Calendario               {base['partidos']} partidos, "
+            f"hasta la J{base['ultima_jornada'] or 0}\n"
+            f"  Puntos por jornada       {base['jornadas_jugadas']} registros"
+        )
+
         raw = conn.execute(
             "SELECT source, COUNT(*) AS n, SUM(LENGTH(content)) AS bytes FROM raw_payload "
             "GROUP BY source"
@@ -202,6 +221,20 @@ def mercado() -> None:
         conn.close()
 
 
+def _por_coste_de_punto(filas: list[dict]) -> list[dict]:
+    """Ordena por euros por punto esperado, dejando al final los que no lo tienen.
+
+    Un jugador sin puntos esperados no es que sea mala compra: es que no
+    sabemos nada de el, normalmente por no tener historico en Primera. Ponerlo
+    al final con su coste ajustado de siempre lo deja visible sin que compita
+    de tu a tu con los que si tienen numeros.
+    """
+    return sorted(
+        filas,
+        key=lambda f: (f["coste_por_punto"] is None, f["coste_por_punto"] or 0),
+    )
+
+
 @app.command()
 def clausulas(
     saldo: int = typer.Option(None, help="Filtrar por lo que te puedes permitir (en euros)."),
@@ -210,10 +243,12 @@ def clausulas(
 ) -> None:
     """Radar de cláusulas: a quién sale más a cuenta arrebatarle un jugador.
 
-    Ordena por coste ajustado = cláusula / (probabilidad × jerarquía). Todavía no
-    es una predicción de puntos, pero ya prioriza pagar poco por alguien que va a
-    jugar y que pesa en su equipo.
+    Ordena por euros de cláusula por punto esperado. Cuando aún no hay puntos
+    esperados de un jugador -un debutante, o antes de descargar el histórico-
+    cae al criterio anterior, el coste ajustado por probabilidad y jerarquía.
     """
+    from fantasyhelper import xpts as modelo
+
     conn, me = _con_liga()
     try:
         # Por defecto se filtra por lo que realmente puedes pagar: mostrar
@@ -232,29 +267,108 @@ def clausulas(
         if not objetivos:
             console.print("[yellow]Ningun objetivo cumple el filtro.[/yellow]")
         else:
+            objetivos = _por_coste_de_punto(
+                modelo.attach(conn, objetivos, cost_field="clause_value")
+            )
             table = display.player_table(
-                "Objetivos: mejor relacion clausula / utilidad",
-                extra=("Dueno", "Clausula", "Coste aj."),
+                "Objetivos: lo que cuesta cada punto esperado",
+                extra=("Clausula", "xPts", "€/pt", "Dueno"),
             )
             for row in objetivos[:limite]:
                 table.add_row(*display.player_row(
-                    row, row["owner"], display.money(row["clause_value"]),
-                    display.money(row["adjusted_cost"], short=True),
+                    row,
+                    display.money(row["clause_value"], short=True),
+                    display.points(row["xpts"]),
+                    display.cost_per_point(row["coste_por_punto"]),
+                    display.truncate(row["owner"], 10),
                 ))
             console.print(table)
 
         riesgo = queries.clause_risk(conn, me["id"])
         if riesgo:
+            riesgo = _por_coste_de_punto(
+                modelo.attach(conn, riesgo, cost_field="clause_value")
+            )
             table = display.player_table(
                 "\nTuyos mas apetecibles: los primeros son los que hay que blindar",
-                extra=("Clausula", "Coste aj."),
+                extra=("Clausula", "xPts", "€/pt"),
             )
             for row in riesgo[:8]:
                 table.add_row(*display.player_row(
-                    row, display.money(row["clause_value"]),
-                    display.money(row["adjusted_cost"], short=True),
+                    row, display.money(row["clause_value"], short=True),
+                    display.points(row["xpts"]),
+                    display.cost_per_point(row["coste_por_punto"]),
                 ))
             console.print(table)
+    finally:
+        conn.close()
+
+
+@app.command()
+def xpts(
+    limite: int = typer.Option(20, help="Cuantas filas mostrar."),
+    posicion: str = typer.Option(None, help="Filtrar por PT, DF, MC o DL."),
+    maximo: int = typer.Option(None, help="Valor maximo del jugador, en euros."),
+    minimo: float = typer.Option(0.0, help="Probabilidad minima de ser titular."),
+    libres: bool = typer.Option(False, "--libres", help="Solo jugadores sin dueno."),
+    orden: str = typer.Option(
+        "coste", help="'coste' = euros por punto esperado; 'puntos' = mas puntos."
+    ),
+) -> None:
+    """Puntos esperados por jornada y cuánto cuesta cada uno.
+
+    Ordenado por euros por punto esperado, que es la comparación que de verdad
+    decide una compra: da igual que uno sume más si cuesta el triple.
+
+    Sin filtro de probabilidad la cabeza de la lista se llena de suplentes
+    baratos, y no es un error: a la larga rinden muchos puntos por euro. Para
+    decidir una alineación concreta conviene subir --minimo.
+    """
+    from fantasyhelper import xpts as modelo
+
+    conn = connect()
+    try:
+        filas = modelo.attach(conn, queries.all_players(conn), cost_field="market_value")
+
+        filas = [f for f in filas if f["xpts"]]
+        if minimo:
+            filas = [f for f in filas if modelo.playing_probability(f) >= minimo]
+        if posicion:
+            filas = [f for f in filas if f["position"] == posicion.upper()]
+        if maximo is not None:
+            filas = [f for f in filas if (f["market_value"] or 0) <= maximo]
+        if libres:
+            filas = [f for f in filas if not f["owner"]]
+
+        if not filas:
+            console.print(
+                "[yellow]Sin datos suficientes.[/yellow] Hace falta el historico "
+                "por temporada: [bold]fh mister historico[/bold]."
+            )
+            return
+
+        if orden == "puntos":
+            filas.sort(key=lambda f: -f["xpts"])
+        else:
+            filas.sort(key=lambda f: f["coste_por_punto"] or float("inf"))
+
+        table = display.player_table(
+            "Puntos esperados en la proxima jornada",
+            extra=("Media", "xPts", "€/pt", "Dueno"),
+        )
+        for fila in filas[:limite]:
+            table.add_row(*display.player_row(
+                fila,
+                display.points(fila.get("media_base")),
+                display.points(fila["xpts"]),
+                display.cost_per_point(fila["coste_por_punto"]),
+                display.truncate(fila["owner"], 10) if fila["owner"] else "libre",
+            ))
+        console.print(table)
+        console.print(
+            "\n[dim]xPts = probabilidad × media esperada × rival × sede. "
+            "La media mezcla el historico con lo que lleve esta temporada.[/dim]"
+        )
     finally:
         conn.close()
 
@@ -769,14 +883,13 @@ def _leer_portapapeles() -> str | None:
 def mister_historico(
     limite: int = typer.Option(None, help="Procesar solo N jugadores (para probar)."),
     rehacer: bool = typer.Option(
-        False, "--rehacer", help="Reprocesar tambien los que ya tienen historico."
+        False, "--rehacer", help="Reprocesar tambien los que ya estan al dia."
     ),
 ) -> None:
-    """Descarga el historico de valor de mercado que Mister publica por jugador.
+    """Descarga la ficha completa de cada jugador: valores, temporadas y calendario.
 
-    Se ejecuta una sola vez: son unos 12 meses de valores diarios por jugador y
-    una peticion por cada uno. Es reanudable, asi que se puede cortar con Ctrl+C
-    y relanzar sin perder lo hecho.
+    Una peticion por jugador, asi que tarda. Es reanudable: se puede cortar con
+    Ctrl+C y relanzar sin perder lo hecho.
     """
     from fantasyhelper.adapters.mister.adapter import MisterAdapter
 
@@ -794,10 +907,29 @@ def mister_historico(
         adapter.client.close()
         conn.close()
 
-    console.print(
-        f"\n[green]Historico descargado:[/green] {procesados} jugadores, "
-        f"{filas:,} valores diarios.".replace(",", ".")
-    )
+    console.print(f"\n[green]Fichas descargadas:[/green] {procesados} jugadores")
+    for concepto, n in filas.items():
+        console.print(f"  {concepto:12} {display.money(n)}")
+
+
+@mister_app.command("reprocesar")
+def mister_reprocesar() -> None:
+    """Relee las fichas ya guardadas y extrae lo que en su dia no se guardo.
+
+    No hace ni una peticion: trabaja sobre el crudo almacenado. Es lo que
+    justifica guardarlo.
+    """
+    from fantasyhelper.adapters.mister.adapter import MisterAdapter
+
+    conn = connect()
+    try:
+        procesadas, filas = MisterAdapter().reprocess_cards(conn)
+    finally:
+        conn.close()
+
+    console.print(f"[green]Fichas releidas:[/green] {procesadas}")
+    for concepto, n in filas.items():
+        console.print(f"  {concepto:12} {display.money(n)}")
 
 
 @mister_app.command("endpoints")

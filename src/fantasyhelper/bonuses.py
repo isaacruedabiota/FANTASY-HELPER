@@ -84,10 +84,12 @@ class BonusRules:
 
 #: Configuracion de LA LIGA 26/27, transcrita de la pantalla de ajustes.
 #:
-#: Ojo con la escala por clasificacion: el primero cobra menos que el ultimo.
-#: Es lo que muestra la configuracion, aunque vaya al reves de lo que uno
-#: esperaria de un premio; si algun dia no cuadran los saldos, es el primer
-#: sitio donde mirar.
+#: La escala por clasificacion va al reves de lo que uno esperaria de un premio:
+#: el primero de la jornada cobra 200.000 y el ultimo 1.400.000. Es intencionado,
+#: y confirmado por el organizador de la liga: sirve para igualar la competicion,
+#: dando mas dinero de mercado a quien peor le va. Tiene una consecuencia para el
+#: modelo: el saldo de los rivales tiende a converger, asi que ir ultimo en una
+#: jornada no es tan malo como parece y liderar tampoco compensa tanto.
 LA_LIGA_2627 = BonusRules(
     per_point=75_000,
     by_matchday_rank={

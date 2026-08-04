@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from fantasyhelper.reconcile import names_match, reconcile
+from fantasyhelper.reconcile import (
+    link_team_alias,
+    merge_placeholder_teams,
+    names_match,
+    reconcile,
+)
 from fantasyhelper.storage import repository as repo
 
 
@@ -139,3 +144,57 @@ def test_es_idempotente(db):
     assert primero.players_linked == 1
     assert segundo.teams_merged == 0
     assert segundo.players_linked == 0
+
+
+# --- equipos que solo tenian numero -----------------------------------------
+
+def test_el_marcador_se_absorbe_cuando_aparece_el_nombre(db):
+    """La ficha del jugador si trae el nombre del equipo; el marcador sobra."""
+    marcador = repo.upsert_team(db, name="mister-team-9", provider="mister",
+                                external_id="9")
+    bueno = repo.upsert_team(db, name="Sevilla")
+    repo.resolve_player(db, provider="futbolfantasy", external_id="f1",
+                        name="Un Jugador", team_id=bueno)
+    # La ficha enlaza el numero 9 con el equipo de verdad.
+    link_team_alias(db, provider="mister", external_id="9", team_id=bueno)
+
+    assert merge_placeholder_teams(db) == 0, "ya lo absorbio el enlace"
+    assert db.execute("SELECT COUNT(*) n FROM team WHERE id = ?",
+                      (marcador,)).fetchone()["n"] == 0
+    assert repo.team_id_for_alias(db, provider="mister", external_id="9") == bueno
+
+
+def test_no_se_absorbe_un_equipo_que_tiene_jugadores(db):
+    """Solo se fusionan duplicados vacios; con jugadores hace falta evidencia."""
+    uno = repo.upsert_team(db, name="Equipo Uno", provider="mister", external_id="5")
+    otro = repo.upsert_team(db, name="Equipo Otro")
+    repo.resolve_player(db, provider="mister", external_id="m1", name="Suyo", team_id=uno)
+
+    link_team_alias(db, provider="mister", external_id="5", team_id=otro)
+
+    assert db.execute("SELECT COUNT(*) n FROM team WHERE id = ?",
+                      (uno,)).fetchone()["n"] == 1
+
+
+def test_al_fusionar_no_se_duplica_el_mismo_partido(db):
+    """El mismo partido visto desde los dos equipos debe quedar en una sola fila."""
+    marcador = repo.upsert_team(db, name="mister-team-9", provider="mister",
+                                external_id="9")
+    bueno = repo.upsert_team(db, name="Sevilla")
+    rival = repo.upsert_team(db, name="Getafe")
+    repo.resolve_player(db, provider="futbolfantasy", external_id="f1",
+                        name="Un Jugador", team_id=bueno)
+
+    for local in (marcador, bueno):
+        repo.upsert_fixture(db, season="2026-27", matchday=1,
+                            home_team_id=local, away_team_id=rival)
+    assert db.execute("SELECT COUNT(*) n FROM fixture").fetchone()["n"] == 2
+
+    link_team_alias(db, provider="mister", external_id="9", team_id=bueno)
+    assert db.execute("SELECT COUNT(*) n FROM fixture").fetchone()["n"] == 1
+
+
+def test_el_marcador_sobrevive_si_aun_no_se_sabe_su_nombre(db):
+    repo.upsert_team(db, name="mister-team-77", provider="mister", external_id="77")
+    assert merge_placeholder_teams(db) == 0
+    assert repo.team_id_for_alias(db, provider="mister", external_id="77") is not None

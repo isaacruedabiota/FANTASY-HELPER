@@ -281,6 +281,34 @@ CREATE TABLE IF NOT EXISTS player_points (
 );
 CREATE INDEX IF NOT EXISTS idx_points_player ON player_points(player_id, season, matchday);
 
+-- Rendimiento por temporada, agregado, tal y como lo publica la ficha del
+-- jugador: puntos totales, media por jornada y en que equipo estaba.
+--
+-- No es el detalle por jornada (eso es player_points) y no se puede derivar de
+-- el: el detalle solo existe desde que empezamos a capturar. Esto, en cambio,
+-- llega hacia atras varias temporadas en la primera lectura, y por eso es la
+-- unica base posible para estimar puntos ANTES de que la temporada empiece.
+--
+-- 'team_id' es el equipo de ESA temporada, no el de ahora: un jugador que
+-- cambia de club arrastra sus puntos, pero no el contexto que los produjo.
+CREATE TABLE IF NOT EXISTS player_season_stat (
+    id            INTEGER PRIMARY KEY,
+    provider      TEXT NOT NULL,
+    player_id     INTEGER NOT NULL REFERENCES player(id) ON DELETE CASCADE,
+    season        TEXT NOT NULL,        -- '2025-26'
+    points        INTEGER,
+    avg_points    REAL,                 -- media por partido disputado
+    -- Partidos que jugo, deducidos de puntos/media. Mister no los publica
+    -- y su 'last_gameweek' es la ultima jornada de la temporada, no los
+    -- partidos del jugador: confundirlos hincha las medias de los suplentes.
+    matches_played INTEGER,
+    team_id       INTEGER REFERENCES team(id),
+    updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE (provider, player_id, season)
+);
+CREATE INDEX IF NOT EXISTS idx_season_stat_season
+    ON player_season_stat(season, team_id);
+
 
 -- Punto de partida congelado de cada participante.
 --

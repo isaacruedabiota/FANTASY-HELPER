@@ -23,7 +23,8 @@ primer día, sin esperar a acumular histórico propio.
 | 0b | Adapter de Mister: HTML + API JSON, con cláusulas | **funcionando** |
 | 0c | Backfill del histórico de valores | **funcionando** |
 | 1 | Consultas por CLI: plantilla, mercado, cláusulas, chollos, ficha | **funcionando** |
-| 2 | Puntos esperados + once óptimo + radar de cláusulas + web | pendiente |
+| 2a | Puntos esperados (xPts) y euros por punto | **funcionando** |
+| 2b | Once óptimo y web | pendiente |
 | 3 | Modelo de valor de mercado entrenado con el histórico | pendiente |
 | 4 | Segundo adapter (Biwenger / LaLiga Fantasy) | pendiente |
 
@@ -86,6 +87,8 @@ fh saldos                # saldo estimado de cada rival
 fh movimientos           # fichajes, ventas y altas de la liga
 fh movimientos --tipos   # qué tipos de movimiento se han visto ya
 fh chollos               # libres y baratos que además van a jugar
+fh xpts                  # puntos esperados y euros por punto esperado
+fh xpts --minimo 0.7 --posicion DL
 fh jugador pedri         # ficha con la evolución del valor
 fh liga                  # clasificación
 ```
@@ -99,13 +102,33 @@ fh dudas             # jugadores cuyo cruce entre fuentes no es seguro
 fh reconciliar       # unifica equipos y jugadores entre fuentes (ya va en capturar)
 fh planificador      # deja la captura automática corriendo
 
-fh mister historico  # una sola vez: ~1 año de valores diarios por jugador
+fh mister historico  # ficha completa de cada jugador (valores, temporadas, calendario)
+fh mister reprocesar # relee las fichas guardadas sin hacer ni una petición
 ```
 
-El **coste ajustado** del radar de cláusulas es `cláusula / (probabilidad × jerarquía)`:
-prioriza pagar poco por alguien que va a jugar y que pesa en su equipo. No es todavía una
-predicción de puntos — eso llega en la Fase 2 — pero ya ordena por lo que importa. Los
-lesionados y sancionados quedan fuera, y a quien no tenemos dato de probabilidad se le
+## Puntos esperados
+
+```
+xPts = P(juega) × media esperada × ajuste de rival × ajuste de sede
+```
+
+Con eso, el radar de cláusulas deja de ordenar por una heurística sin unidades y pasa a
+ordenar por **euros por punto esperado**, que ya es una respuesta: Mbappé sale a 3,6M el
+punto y Sivera a 1,5M.
+
+La media esperada mezcla tres cosas, cada una con el peso que merece: las temporadas
+pasadas (las recientes cuentan más), lo que lleve hecho esta temporada (que gana peso
+jornada a jornada) y la media de su posición, hacia la que se le arrastra en proporción a
+lo poco que sepamos de él. Ese último paso no es un adorno: sin él, un jugador que
+disputó un solo partido y sacó 12 puntos aparecía con una media de 12, por delante de
+cualquier crack.
+
+Un aviso sobre los partidos jugados: Mister **no** los publica. Su `last_gameweek` es la
+última jornada de la temporada, no las que jugó el jugador. Se deducen dividiendo puntos
+entre media, que es exacto porque su media es por partido disputado.
+
+Los lesionados y sancionados valen cero, no una probabilidad baja: no es que sea
+improbable que jueguen, es que no pueden. Y a quien no tenemos dato de probabilidad se le
 supone una baja (0,2) en vez de una media: no saber si juega no es lo mismo que jugar a
 medias.
 
