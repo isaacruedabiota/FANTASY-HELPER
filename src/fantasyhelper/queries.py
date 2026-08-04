@@ -401,32 +401,40 @@ def feed_movements(conn: sqlite3.Connection, since: str) -> dict[str, int]:
     return movimientos
 
 
-def estimated_balances(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def estimated_balances(conn: sqlite3.Connection) -> list[dict]:
     """Saldo estimado de cada participante.
 
-    Mister solo publica el saldo propio, pero se puede reconstruir el de los
-    rivales porque la liga arranca con una regla conocida:
+    Mister solo publica el saldo propio, pero el del resto se deduce de una
+    identidad que se mantiene sola:
 
-        saldo = 50M - valor de la plantilla inicial
-                    - lo gastado en subir clausulas
-                    + - movimientos posteriores (compras, ventas, bonificaciones)
+        saldo = 50M - valor de la plantilla de HOY - gastado en clausulas
 
-    El primer termino se ancla en la primera captura tras el reinicio, que es
-    exacta. Lo gastado en clausulas sale del nivel de cada jugador. Los
-    movimientos posteriores se van acumulando del feed segun ocurren.
+    Funciona porque comprar o vender a precio de mercado no crea ni destruye
+    dinero: solo lo mueve entre la caja y la plantilla, asi que la suma de las
+    dos partes sigue siendo el presupuesto de salida. Lo unico que sale del
+    sistema es lo que se paga por subir clausulas.
 
-    Se devuelve tambien el saldo real cuando se conoce (el propio), para poder
-    contrastar la estimacion contra la verdad.
+    Por eso NO se suman aqui los movimientos del feed: ya estan reflejados en el
+    valor de la plantilla, y contarlos otra vez los duplicaria. El feed sirve
+    para saber que ha pasado y, mas adelante, para corregir las operaciones que
+    no van a precio de mercado (un clausulazo se paga a 1,5 veces el valor).
+
+    Se devuelve tambien el saldo real cuando se conoce -solo el propio-, que es
+    la unica forma de saber si la estimacion vale.
     """
-    base = baseline_at(conn)
-    if base is None:
-        return []
-
-    movimientos = feed_movements(conn, base)
-
     filas = conn.execute(
         """
-        WITH clausulas_hoy AS (
+        WITH plantilla_hoy AS (
+            SELECT o.manager_id, SUM(v.market_value) AS valor
+            FROM ownership_snapshot o
+            JOIN player_value_snapshot v
+              ON v.player_id = o.player_id AND v.provider = 'mister'
+             AND v.source = 'mister' AND v.snapshot_date = o.snapshot_date
+            WHERE o.snapshot_date = (SELECT MAX(snapshot_date) FROM ownership_snapshot)
+              AND o.manager_id IS NOT NULL
+            GROUP BY o.manager_id
+        ),
+        clausulas_hoy AS (
             SELECT o.manager_id,
                    SUM(COALESCE(o.clause_level, 0) * o.clause_floor * ?) AS gasto
             FROM ownership_snapshot o
@@ -442,30 +450,20 @@ def estimated_balances(conn: sqlite3.Connection) -> list[sqlite3.Row]:
             FROM manager_snapshot WHERE balance IS NOT NULL
         )
         SELECT m.id, m.name, m.is_me,
-               b.squad_value AS valor_inicial,
-               -- El gasto en clausulas cuenta entero, no como incremento sobre
-               -- el ancla: un reinicio deja todos los niveles a cero, asi que
-               -- todo lo que hay ahora se ha pagado despues del reinicio.
+               p.valor AS valor_plantilla,
                COALESCE(ch.gasto, 0) AS gasto_clausulas,
-               ? - b.squad_value - COALESCE(ch.gasto, 0) AS saldo_estimado,
+               ? - p.valor - COALESCE(ch.gasto, 0) AS saldo_estimado,
                sr.balance AS saldo_real
-        FROM manager_baseline b
-        JOIN manager m ON m.id = b.manager_id
+        FROM plantilla_hoy p
+        JOIN manager m ON m.id = p.manager_id
         LEFT JOIN clausulas_hoy ch ON ch.manager_id = m.id
         LEFT JOIN saldo_real sr ON sr.manager_id = m.id AND sr.rn = 1
+        ORDER BY saldo_estimado DESC
         """,
         (CLAUSE_STEP_COST_RATIO, INITIAL_BUDGET),
     ).fetchall()
 
-    resultado = []
-    for fila in filas:
-        datos = dict(fila)
-        datos["movimientos"] = movimientos.get(fila["name"], 0)
-        datos["saldo_estimado"] = fila["saldo_estimado"] + datos["movimientos"]
-        resultado.append(datos)
-
-    resultado.sort(key=lambda f: f["saldo_estimado"], reverse=True)
-    return resultado
+    return [dict(fila) for fila in filas]
 
 
 def feed_events(

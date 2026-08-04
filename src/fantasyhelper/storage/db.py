@@ -43,6 +43,7 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("ownership_snapshot", "clause_level", "INTEGER"),
     ("ownership_snapshot", "clause_floor", "INTEGER"),
     ("league", "baseline_date", "TEXT"),
+    ("league", "bonus_rules", "TEXT"),
 )
 
 

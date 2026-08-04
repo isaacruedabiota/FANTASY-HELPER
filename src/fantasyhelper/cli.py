@@ -412,6 +412,48 @@ def movimientos(
 
 
 @app.command()
+def bonificaciones(
+    aplicar: bool = typer.Option(
+        False, "--aplicar", help="Guardar la configuración conocida de LA LIGA 26/27."
+    ),
+) -> None:
+    """Bonificaciones de la liga: qué se cobra por cada concepto."""
+    from fantasyhelper import bonuses
+    from fantasyhelper.storage.db import transaction
+
+    conn = connect()
+    try:
+        if aplicar:
+            with transaction(conn):
+                bonuses.save_rules(conn, bonuses.LA_LIGA_2627)
+            console.print("[green]Bonificaciones guardadas.[/green]")
+
+        reglas = bonuses.load_rules(conn)
+        if not reglas.per_point and not reglas.by_matchday_rank:
+            console.print(
+                "[yellow]No hay bonificaciones configuradas.[/yellow] "
+                "Ejecuta [bold]fh bonificaciones --aplicar[/bold]."
+            )
+            return
+
+        console.print("[bold]Por jornada[/bold]")
+        console.print(f"  Por punto              {display.money(reglas.per_point)} €")
+        console.print(f"  Por jugador en el once {display.money(reglas.per_ideal_xi_player)} €")
+        console.print(f"  Por acierto de quiniela {display.money(reglas.per_quiniela_hit)} €")
+        if reglas.per_goal:
+            console.print(f"  Por gol                {display.money(reglas.per_goal)} €")
+        if reglas.fixed_per_matchday:
+            console.print(f"  Fija                   {display.money(reglas.fixed_per_matchday)} €")
+
+        if reglas.by_matchday_rank:
+            console.print("\n[bold]Por puesto en la jornada[/bold]")
+            for puesto, importe in sorted(reglas.by_matchday_rank.items()):
+                console.print(f"  {puesto:>2}º  {display.money(importe)} €")
+    finally:
+        conn.close()
+
+
+@app.command()
 def baseline() -> None:
     """Congela el punto de partida de la liga para poder estimar saldos.
 
@@ -452,49 +494,42 @@ def saldos() -> None:
     """
     conn = connect()
     try:
-        if queries.baseline_at(conn) is None:
-            console.print(
-                "[yellow]Falta congelar el punto de partida de la liga.[/yellow]\n"
-                "Tras crear o reiniciarla, con una captura recién hecha: "
-                "[bold]fh baseline[/bold]"
-            )
-            return
-
         filas = queries.estimated_balances(conn)
         if not filas:
             console.print(
                 "[yellow]Sin datos suficientes.[/yellow] Hace falta una captura de "
-                "las plantillas del día de partida."
+                "las plantillas: [bold]fh capturar --solo mister[/bold]."
             )
             return
 
         table = Table(title="Saldo estimado", header_style="bold", title_justify="left")
         table.add_column("Participante")
-        table.add_column("Plantilla inicial", justify="right")
+        table.add_column("Plantilla", justify="right")
         table.add_column("Clausulas", justify="right")
-        table.add_column("Movimientos", justify="right")
         table.add_column("Saldo estimado", justify="right")
         table.add_column("Saldo real", justify="right")
+        table.add_column("Desvio", justify="right")
         for row in filas:
             nombre = f"[bold]{row['name']}[/bold]" if row["is_me"] else row["name"]
-            real = display.money(row["saldo_real"]) if row["saldo_real"] is not None else "-"
-            # Si conocemos el real, el contraste dice si la estimacion vale.
+            real = desvio = "-"
+            # Solo se conoce el saldo propio, y es el unico contraste posible.
             if row["saldo_real"] is not None:
-                desvio = row["saldo_estimado"] - row["saldo_real"]
-                color = "green" if abs(desvio) < 100_000 else "red"
-                real = f"[{color}]{real}[/{color}]"
+                diferencia = row["saldo_estimado"] - row["saldo_real"]
+                color = "green" if abs(diferencia) < 100_000 else "red"
+                real = display.money(row["saldo_real"])
+                desvio = f"[{color}]{display.delta(diferencia) or '0'}[/{color}]"
             table.add_row(
                 nombre,
-                display.money(row["valor_inicial"]),
+                display.money(row["valor_plantilla"]),
                 display.money(-int(row["gasto_clausulas"]) or None),
-                display.delta(row["movimientos"]) or "-",
                 display.money(int(row["saldo_estimado"])),
                 real,
+                desvio,
             )
         console.print(table)
         console.print(
-            f"\n[dim]Punto de partida: {queries.baseline_at(conn)}. "
-            "Los movimientos posteriores salen del feed.[/dim]"
+            "\n[dim]saldo = 50M − plantilla − clausulas. Comprar o vender a precio de "
+            "mercado no altera la suma: solo mueve dinero entre caja y plantilla.[/dim]"
         )
     finally:
         conn.close()

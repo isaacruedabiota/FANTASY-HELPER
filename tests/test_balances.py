@@ -1,4 +1,4 @@
-﻿"""Tests de la estimacion de saldos de los rivales."""
+"""Tests de la estimacion de saldos de los rivales."""
 
 from __future__ import annotations
 
@@ -31,26 +31,18 @@ def liga(db):
     return {"league_id": league_id, "yo": yo, "rival": rival, "fichar": fichar}
 
 
-def test_sin_ancla_no_estima(db, liga):
-    """Adivinar el dia de partida desplazaria el saldo de todos: mejor no estimar."""
-    liga["fichar"](liga["yo"], "Uno", 10_000_000)
-    assert queries.estimated_balances(db) == []
-
-
 def test_saldo_es_el_presupuesto_menos_la_plantilla(db, liga):
     liga["fichar"](liga["yo"], "Uno", 10_000_000)
     liga["fichar"](liga["yo"], "Dos", 5_000_000)
-    queries.freeze_baseline(db)
 
     fila = next(f for f in queries.estimated_balances(db) if f["name"] == "Yo")
-    assert fila["valor_inicial"] == 15_000_000
+    assert fila["valor_plantilla"] == 15_000_000
     assert fila["saldo_estimado"] == queries.INITIAL_BUDGET - 15_000_000
 
 
 def test_descuenta_lo_gastado_en_subir_clausulas(db, liga):
     """Cada escalon cuesta el 20% del suelo (listeners.js)."""
     liga["fichar"](liga["rival"], "Caro", 2_000_000, nivel=3, suelo=2_000_000)
-    queries.freeze_baseline(db)
 
     fila = next(f for f in queries.estimated_balances(db) if f["name"] == "Rival")
     assert fila["gasto_clausulas"] == pytest.approx(2_000_000 * 0.2 * 3)
@@ -61,10 +53,28 @@ def test_descuenta_lo_gastado_en_subir_clausulas(db, liga):
 
 def test_nivel_cero_no_cuesta_nada(db, liga):
     liga["fichar"](liga["rival"], "Normal", 1_000_000)
-    queries.freeze_baseline(db)
 
     fila = next(f for f in queries.estimated_balances(db) if f["name"] == "Rival")
     assert fila["gasto_clausulas"] == 0
+
+
+def test_vender_a_precio_de_mercado_no_altera_el_saldo(db, liga):
+    """La clave del metodo: una venta mueve dinero de plantilla a caja.
+
+    Por eso basta con mirar la plantilla de hoy y no hace falta seguir cada
+    operacion: la suma de caja y plantilla sigue siendo el presupuesto inicial.
+    """
+    uno = liga["fichar"](liga["yo"], "Se queda", 10_000_000)
+    liga["fichar"](liga["yo"], "Se vende", 5_000_000)
+    antes = next(f for f in queries.estimated_balances(db) if f["name"] == "Yo")
+
+    repo.prune_ownership(
+        db, league_id=liga["league_id"], manager_id=liga["yo"], keep_player_ids={uno}
+    )
+    despues = next(f for f in queries.estimated_balances(db) if f["name"] == "Yo")
+
+    assert antes["saldo_estimado"] == queries.INITIAL_BUDGET - 15_000_000
+    assert despues["saldo_estimado"] == antes["saldo_estimado"] + 5_000_000
 
 
 def test_devuelve_el_saldo_real_cuando_se_conoce(db, liga):
@@ -72,7 +82,6 @@ def test_devuelve_el_saldo_real_cuando_se_conoce(db, liga):
     liga["fichar"](liga["yo"], "Uno", 10_000_000)
     liga["fichar"](liga["rival"], "Otro", 10_000_000)
     repo.record_manager_state(db, manager_id=liga["yo"], balance=40_000_000)
-    queries.freeze_baseline(db)
 
     filas = {f["name"]: f for f in queries.estimated_balances(db)}
     assert filas["Yo"]["saldo_real"] == 40_000_000
@@ -80,53 +89,8 @@ def test_devuelve_el_saldo_real_cuando_se_conoce(db, liga):
     assert filas["Rival"]["saldo_real"] is None
 
 
-def _movimiento(db, liga, texto, importe, fecha):
-    db.execute(
-        "INSERT INTO feed_event (external_id, league_id, first_seen, snapshot_date, "
-        "kind, summary, player_ids, user_ids, amounts, html) "
-        "VALUES (?, ?, ?, ?, 'card-transfer', ?, '[]', '[]', ?, '')",
-        (texto[:20] + fecha, liga["league_id"], fecha, fecha, texto, f"[{importe}]"),
-    )
-
-
-def test_una_venta_al_sistema_suma_saldo(db, liga):
-    liga["fichar"](liga["rival"], "Uno", 10_000_000)
-    queries.freeze_baseline(db)
-    _movimiento(db, liga, "Alguien | cambia de | Rival | a | Mister |", 500_000, "2026-08-05")
-
-    fila = next(f for f in queries.estimated_balances(db) if f["name"] == "Rival")
-    assert fila["movimientos"] == 500_000
-    assert fila["saldo_estimado"] == queries.INITIAL_BUDGET - 10_000_000 + 500_000
-
-
-def test_una_compra_al_sistema_resta_saldo(db, liga):
-    liga["fichar"](liga["rival"], "Uno", 10_000_000)
-    queries.freeze_baseline(db)
-    _movimiento(db, liga, "Alguien | cambia de | Mister | a | Rival |", 800_000, "2026-08-05")
-
-    fila = next(f for f in queries.estimated_balances(db) if f["name"] == "Rival")
-    assert fila["movimientos"] == -800_000
-
-
-def test_un_traspaso_entre_participantes_mueve_a_los_dos(db, liga):
-    liga["fichar"](liga["yo"], "Mio", 10_000_000)
-    liga["fichar"](liga["rival"], "Suyo", 10_000_000)
-    queries.freeze_baseline(db)
-    _movimiento(db, liga, "Alguien | cambia de | Yo | a | Rival |", 3_000_000, "2026-08-05")
-
-    filas = {f["name"]: f for f in queries.estimated_balances(db)}
-    assert filas["Yo"]["movimientos"] == 3_000_000
-    assert filas["Rival"]["movimientos"] == -3_000_000
-
-
-def test_los_movimientos_del_dia_del_ancla_no_se_cuentan_dos_veces(db, liga):
-    """Ese dia ya esta reflejado en la plantilla capturada; sumarlo lo duplicaria."""
-    liga["fichar"](liga["rival"], "Uno", 10_000_000)
-    queries.freeze_baseline(db)
-    _movimiento(db, liga, "Alguien | cambia de | Rival | a | Mister |", 500_000, "2026-08-04")
-
-    fila = next(f for f in queries.estimated_balances(db) if f["name"] == "Rival")
-    assert fila["movimientos"] == 0
+def test_sin_plantillas_no_estima(db, liga):
+    assert queries.estimated_balances(db) == []
 
 
 def test_prune_quita_los_jugadores_que_ya_no_estan(db, liga):
@@ -143,3 +107,36 @@ def test_prune_quita_los_jugadores_que_ya_no_estan(db, liga):
         "SELECT COUNT(*) n FROM ownership_snapshot WHERE manager_id = ?", (liga["yo"],)
     ).fetchone()["n"]
     assert quedan == 1
+
+
+# --- lectura del feed (registro de movimientos, no usado para el saldo) -----
+
+def _movimiento(db, liga, texto, importe, fecha):
+    db.execute(
+        "INSERT INTO feed_event (external_id, league_id, first_seen, snapshot_date, "
+        "kind, summary, player_ids, user_ids, amounts, html) "
+        "VALUES (?, ?, ?, ?, 'card-transfer', ?, '[]', '[]', ?, '')",
+        (texto[:20] + fecha, liga["league_id"], fecha, fecha, texto, f"[{importe}]"),
+    )
+
+
+def test_una_venta_al_sistema_se_lee_como_ingreso(db, liga):
+    _movimiento(db, liga, "Alguien | cambia de | Rival | a | Mister |", 500_000, "2026-08-05")
+    assert queries.feed_movements(db, "2026-08-04")["Rival"] == 500_000
+
+
+def test_una_compra_al_sistema_se_lee_como_gasto(db, liga):
+    _movimiento(db, liga, "Alguien | cambia de | Mister | a | Rival |", 800_000, "2026-08-05")
+    assert queries.feed_movements(db, "2026-08-04")["Rival"] == -800_000
+
+
+def test_un_traspaso_entre_participantes_mueve_a_los_dos(db, liga):
+    _movimiento(db, liga, "Alguien | cambia de | Yo | a | Rival |", 3_000_000, "2026-08-05")
+    movimientos = queries.feed_movements(db, "2026-08-04")
+    assert movimientos["Yo"] == 3_000_000
+    assert movimientos["Rival"] == -3_000_000
+
+
+def test_solo_cuenta_lo_posterior_al_corte(db, liga):
+    _movimiento(db, liga, "Alguien | cambia de | Rival | a | Mister |", 500_000, "2026-08-03")
+    assert queries.feed_movements(db, "2026-08-04") == {}

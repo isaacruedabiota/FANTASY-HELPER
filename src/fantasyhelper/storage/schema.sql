@@ -113,6 +113,9 @@ CREATE TABLE IF NOT EXISTS league (
     -- reiniciar la liga, cuando todos tienen el presupuesto de salida. Es el
     -- ancla para estimar el saldo de los rivales, que Mister no publica.
     baseline_date TEXT,
+    -- Bonificaciones de la liga, en JSON. No se pueden leer de ninguna API:
+    -- estan en la pantalla de ajustes de la comunidad y hay que transcribirlas.
+    bonus_rules   TEXT,
     UNIQUE (provider, external_id)
 );
 

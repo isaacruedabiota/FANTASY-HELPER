@@ -17,8 +17,10 @@ dependencies = [
     "rich>=13.7",
     "python-dotenv>=1.0",
     "apscheduler>=3.10",
-    "pandas>=2.2",
 ]
+# Nada de pandas: no se usa en ninguna parte y en la Raspberry son 100 MB de
+# descarga para nada. El analisis se hace en SQL, que para este tamano de datos
+# sobra y evita cargar las tablas enteras en memoria.
 
 [project.optional-dependencies]
 dev = [
