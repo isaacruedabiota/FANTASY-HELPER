@@ -1,0 +1,369 @@
+/* Estilos de la web. Primero el movil, que es donde se mira el mercado.
+ *
+ * Los colores salen de una paleta validada: el azul de serie pasa el contraste
+ * 3:1 contra las dos superficies, y los de subida y bajada son colores de
+ * estado, no de serie. Rojo y verde se confunden con deuteranopia, asi que el
+ * signo + o - va SIEMPRE escrito en el texto: el color refuerza, nunca informa
+ * el solo.
+ */
+
+:root {
+  color-scheme: light;
+  --surface: #fcfcfb;
+  --plane: #f9f9f7;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.1);
+
+  --serie: #2a78d6;
+  --sube: #006300;
+  --baja: #d03b3b;
+  --aviso: #ec835a;
+
+  --radio: 10px;
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface: #1a1a19;
+    --plane: #0d0d0d;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.1);
+    --serie: #3987e5;
+    --sube: #0ca30c;
+    --baja: #d03b3b;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  background: var(--plane);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-text-size-adjust: 100%;
+}
+
+a { color: inherit; text-decoration: none; }
+
+/* --- estructura ---------------------------------------------------------- */
+
+header.top {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 14px 0;
+}
+
+header.top h1 {
+  font-size: 17px;
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+
+nav {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+nav::-webkit-scrollbar { display: none; }
+
+nav a {
+  padding: 7px 12px;
+  font-size: 14px;
+  color: var(--ink-2);
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+nav a.activo { color: var(--ink); border-bottom-color: var(--serie); font-weight: 600; }
+
+main { padding: 14px; max-width: 900px; margin: 0 auto; }
+
+section { margin-bottom: 26px; }
+
+h2 {
+  font-size: 15px;
+  margin: 0 0 3px;
+  font-weight: 600;
+}
+
+.sub {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0 0 10px;
+}
+
+/* --- cifras de cabecera --------------------------------------------------- */
+
+/* Columnas fijas y no `auto-fit`. Con auto-fit, una cifra en `nowrap` ensancha
+ * su propia pista -los hijos de un grid traen `min-width: auto`- y la fila
+ * entera se sale del movil. Se veia en la captura: el tercer recuadro cortado.
+ */
+.tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 22px;
+}
+.tiles > * { min-width: 0; }
+
+/* La cifra de portada ocupa la fila entera en movil: un saldo de ocho digitos
+ * no cabe en medio ancho de pantalla. */
+.tile.hero { grid-column: 1 / -1; }
+
+@media (min-width: 560px) {
+  .tiles { grid-template-columns: repeat(3, 1fr); }
+  .tile.hero { grid-column: auto; }
+}
+
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radio);
+  padding: 10px 12px;
+}
+
+.tile .etiqueta {
+  font-size: 12px;
+  color: var(--muted);
+  display: block;
+}
+
+/* Cifras grandes con figuras proporcionales: tabular-nums deja los numeros
+ * sueltos con demasiado aire a este tamano. */
+.tile .cifra {
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  display: block;
+}
+
+/* clamp para que la cifra grande se encoja antes que partirse. */
+.hero .cifra { font-size: clamp(22px, 7.2vw, 32px); }
+.tile .cifra small { font-size: 0.5em; color: var(--muted); margin-left: 2px; }
+
+/* --- tarjetas de jugador -------------------------------------------------- */
+
+.lista { display: flex; flex-direction: column; gap: 6px; }
+
+.card {
+  display: grid;
+  /* minmax(0,1fr) y no 1fr: sin el minimo a cero, un nombre largo empuja la
+   * columna derecha fuera de la tarjeta y el numero se corta. */
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radio);
+  padding: 9px 12px;
+}
+
+.card:hover { border-color: var(--axis); }
+.card > * { min-width: 0; }
+
+/* Nombre en una sola linea: si no cabe, puntos suspensivos. Partirlo en dos
+ * hace la tarjeta el doble de alta y solo caben cuatro en pantalla. */
+.card .nombre {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card .meta, .card .cifras {
+  font-size: 12.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card .cifras { text-align: right; font-variant-numeric: tabular-nums; }
+.card .principal {
+  text-align: right;
+  font-weight: 600;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.card .principal small {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 11px;
+  margin-left: 2px;
+}
+.card .estado { margin-left: 4px; }
+
+.pos {
+  display: inline-block;
+  min-width: 24px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-2);
+  background: var(--plane);
+  border-radius: 4px;
+  padding: 1px 4px;
+  margin-right: 6px;
+}
+
+.sube { color: var(--sube); }
+.baja { color: var(--baja); }
+.estado { color: var(--aviso); font-weight: 600; }
+
+/* --- tablas (solo donde una tabla es la forma correcta) ------------------- */
+
+.tabla-scroll { overflow-x: auto; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+th {
+  text-align: right;
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+th:first-child, td:first-child { text-align: left; }
+
+td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+  white-space: nowrap;
+}
+
+tbody tr:hover { background: var(--surface); }
+
+/* --- grafico -------------------------------------------------------------- */
+
+.chart-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radio);
+  padding: 14px 12px 8px;
+  position: relative;
+}
+
+/* El area de dibujo. El SVG se estira a lo ancho; las etiquetas van encima en
+ * HTML para que el texto no se deforme con el. */
+.plot { position: relative; padding-right: 40px; }
+svg.chart { width: 100%; height: 210px; display: block; }
+
+.tick-y {
+  position: absolute;
+  right: 0;
+  transform: translateY(-50%);
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  padding-left: 6px;
+}
+
+.eje-x {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--muted);
+  padding: 4px 40px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* El punto de hover tambien va fuera del SVG: dentro se deformaria en ovalo. */
+.marker {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  margin: -5.5px 0 0 -5.5px;
+  border-radius: 50%;
+  background: var(--serie);
+  box-shadow: 0 0 0 2px var(--surface);
+  opacity: 0;
+  pointer-events: none;
+}
+.plot.activo .marker { opacity: 1; }
+
+svg.chart .grid { stroke: var(--grid); stroke-width: 1; }
+svg.chart .line {
+  fill: none;
+  stroke: var(--serie);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+svg.chart .area { fill: var(--serie); opacity: 0.1; stroke: none; }
+svg.chart .hover-ring, svg.chart .hover-dot { display: none; }
+svg.chart .crosshair {
+  stroke: var(--axis);
+  stroke-width: 1;
+  opacity: 0;
+  vector-effect: non-scaling-stroke;
+}
+.plot.activo svg.chart .crosshair { opacity: 1; }
+
+.tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--surface);
+  border: 1px solid var(--axis);
+  border-radius: 6px;
+  padding: 5px 9px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.1s;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+.tooltip.visible { opacity: 1; }
+.tooltip .fecha { color: var(--muted); display: block; font-size: 11.5px; }
+
+svg.spark { vertical-align: middle; }
+svg.spark polyline { fill: none; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+svg.spark.up polyline { stroke: var(--sube); }
+svg.spark.down polyline { stroke: var(--baja); }
+
+.vacio, .nota {
+  color: var(--muted);
+  font-size: 13px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radio);
+  padding: 12px;
+}
+
+.nota { margin-top: 14px; line-height: 1.5; }
+
+details summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+  padding: 6px 0;
+}
+
+@media (min-width: 620px) {
+  main { padding: 20px; }
+  header.top { padding: 14px 20px 0; }
+  header.top h1 { font-size: 20px; }
+}

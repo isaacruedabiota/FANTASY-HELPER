@@ -307,7 +307,13 @@ def attach(
     rows: list,
     *,
     model: MomentumModel | None = None,
+    predictions: dict[int, dict] | None = None,
 ) -> list[dict]:
-    """Anade la prediccion de valor a filas de jugadores que ya traigan `id`."""
-    prediccion = forecast(conn, model=model)
+    """Anade la prediccion de valor a filas de jugadores que ya traigan `id`.
+
+    `predictions` evita recalcular. Importa: cada llamada a `forecast` recorre el
+    historico entero, y una pantalla que muestre cuatro listas lo recorreria
+    cuatro veces para obtener exactamente los mismos numeros.
+    """
+    prediccion = predictions if predictions is not None else forecast(conn, model=model)
     return [{**dict(fila), **prediccion.get(dict(fila)["id"], {})} for fila in rows]

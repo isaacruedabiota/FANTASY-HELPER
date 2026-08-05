@@ -1,0 +1,92 @@
+"""Cache de los modelos caros, invalidada por los datos y no por el reloj.
+
+Calibrar el modelo de valor recorre el historico entero: casi un segundo en el
+portatil y bastante mas en la Raspberry. Hacerlo en cada peticion HTTP haria la
+web inservible en el movil.
+
+La clave no es un TTL sino una huella de los datos: la ultima fecha capturada y
+cuantas filas hay. Los datos cambian dos veces al dia, cuando corre la captura,
+asi que con un TTL habria que elegir entre recalcular de mas o servir datos
+viejos; con la huella se recalcula exactamente cuando hay algo nuevo y ni una vez
+mas.
+"""
+
+from __future__ import annotations
+
+import logging
+import sqlite3
+import threading
+import time
+from dataclasses import dataclass
+from typing import Any
+
+from fantasyhelper import market
+
+log = logging.getLogger(__name__)
+
+
+def data_fingerprint(conn: sqlite3.Connection) -> tuple:
+    """Huella de los datos que alimentan los modelos.
+
+    Basta con la serie de valores: es la unica entrada del modelo de mercado, y
+    la captura la reescribe siempre que escribe cualquier otra cosa.
+    """
+    row = conn.execute(
+        "SELECT MAX(snapshot_date) AS ultima, COUNT(*) AS filas "
+        "FROM player_value_snapshot WHERE provider = 'mister'"
+    ).fetchone()
+    return (row["ultima"], row["filas"])
+
+
+@dataclass
+class _Entry:
+    fingerprint: tuple
+    value: Any
+    computed_at: float
+    seconds: float
+
+
+class ModelCache:
+    """Guarda el modelo calibrado mientras los datos no cambien.
+
+    Con lock porque uvicorn sirve varias peticiones a la vez y calibrar dos veces
+    en paralelo en una Raspberry con poca memoria es justo lo que no se quiere.
+    """
+
+    def __init__(self) -> None:
+        self._entries: dict[str, _Entry] = {}
+        self._lock = threading.Lock()
+
+    def get(self, key: str, fingerprint: tuple, build) -> Any:
+        with self._lock:
+            entrada = self._entries.get(key)
+            if entrada is not None and entrada.fingerprint == fingerprint:
+                return entrada.value
+
+            inicio = time.perf_counter()
+            valor = build()
+            transcurrido = time.perf_counter() - inicio
+            self._entries[key] = _Entry(fingerprint, valor, time.time(), transcurrido)
+            log.info("modelo '%s' recalculado en %.1fs", key, transcurrido)
+            return valor
+
+    def stats(self) -> list[dict]:
+        with self._lock:
+            return [
+                {
+                    "modelo": clave,
+                    "calculado_hace": time.time() - e.computed_at,
+                    "tardo": e.seconds,
+                }
+                for clave, e in self._entries.items()
+            ]
+
+
+CACHE = ModelCache()
+
+
+def momentum_model(conn: sqlite3.Connection) -> market.MomentumModel:
+    """El modelo de valor, calibrado como mucho una vez por captura."""
+    return CACHE.get(
+        "market", data_fingerprint(conn), lambda: market.calibrate(conn)
+    )

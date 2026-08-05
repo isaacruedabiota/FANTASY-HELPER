@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block contenido %}
+<section>
+  <h2>Cómo se comporta cada tramo</h2>
+  <p class="sub">
+    La comparación se hace siempre dentro del tramo: uno de 500k oscila un 30%
+    en una semana y uno de 24M un 1,4%.
+  </p>
+  <div class="tabla-scroll">
+    <table>
+      <thead>
+        <tr><th>Tramo</th><th>Movimiento 7d</th><th>Volatilidad</th><th>Fiabilidad</th><th>Muestras</th></tr>
+      </thead>
+      <tbody>
+        {% for _, _, nombre in bandas %}
+          {% set banda = modelo.bands.get(nombre) %}
+          {% if banda %}
+            <tr>
+              <td>{{ nombre }}</td>
+              <td>{{ deriva.get(nombre)|percent }}</td>
+              <td>{{ '%.1f'|format(banda.volatility * 100) }}%</td>
+              <td>{% if banda.useful %}{{ '%+.2f'|format(banda.correlation) }}{% else %}<span class="baja">no fiable</span>{% endif %}</td>
+              <td>{{ banda.samples|money }}</td>
+            </tr>
+          {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>Van a subir más que los de su precio</h2>
+  <p class="sub">Ventaja esperada sobre su tramo en los próximos siete días.</p>
+  {{ m.lista(suben, tipo='ventaja') }}
+</section>
+
+<section>
+  <h2>Van a quedarse atrás</h2>
+  <p class="sub">Si tienes alguno, es el momento de venderlo.</p>
+  {{ m.lista(bajan, tipo='ventaja') }}
+</section>
+
+<p class="nota">
+  Lo medido es cuánto se aparta un jugador de los de su precio, no si sube el
+  mercado. Da igual para decidir: si sube todo, sube también lo que ya tienes.
+  El modelo se recalibra con cada captura sobre
+  {{ modelo.samples|money }} observaciones de {{ modelo.dates }} días.
+</p>
+{% endblock %}

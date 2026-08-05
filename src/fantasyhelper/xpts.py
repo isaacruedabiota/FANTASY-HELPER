@@ -420,6 +420,7 @@ def attach(
     rows: list,
     *,
     cost_field: str = "market_value",
+    predictions: dict[int, dict] | None = None,
 ) -> list[dict]:
     """Anade xPts y euros por punto esperado a filas de jugadores.
 
@@ -427,8 +428,11 @@ def attach(
     precio pedido en el mercado, el valor de mercado en el resto. Es la razon de
     ser de todo esto: 3,1 puntos esperados no dicen nada por si solos, pero
     1,4M por punto frente a 4,8M por punto ya es una decision.
+
+    `predictions` evita recalcular el modelo cuando se enriquecen varias listas
+    seguidas, que es lo que hace cualquier pantalla de resumen.
     """
-    modelo = expected_points(conn)
+    modelo = predictions if predictions is not None else expected_points(conn)
 
     enriquecidas: list[dict] = []
     for fila in rows:

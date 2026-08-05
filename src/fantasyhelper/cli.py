@@ -145,6 +145,39 @@ def planificador() -> None:
     scheduler_main()
 
 
+@app.command()
+def web(
+    puerto: int = typer.Option(8129, help="Puerto en el que escuchar."),
+    host: str = typer.Option(
+        "0.0.0.0", help="0.0.0.0 para verla desde el movil; 127.0.0.1 solo local."
+    ),
+    recargar: bool = typer.Option(False, "--recargar", help="Recargar al editar."),
+) -> None:
+    """Arranca la web de consulta.
+
+    Por defecto escucha en toda la red local, que es lo que hace falta para
+    abrirla desde el móvil. No lleva contraseña: no la expongas a internet tal
+    cual.
+    """
+    try:
+        import uvicorn
+    except ImportError:
+        console.print(
+            "[red]Falta instalar la web.[/red] Ejecuta "
+            "[bold]pip install -e '.[web]'[/bold]."
+        )
+        raise typer.Exit(1) from None
+
+    console.print(
+        f"[green]Web en[/green] http://{'localhost' if host.startswith('127') else host}"
+        f":{puerto}  ·  Ctrl+C para parar"
+    )
+    uvicorn.run(
+        "fantasyhelper.web.app:app", host=host, port=puerto, reload=recargar,
+        log_level="warning",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Consultas
 # ---------------------------------------------------------------------------

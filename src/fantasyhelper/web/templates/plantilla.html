@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block contenido %}
+<div class="tiles">
+  <div class="tile hero">
+    <span class="etiqueta">Valor de la plantilla</span>
+    <span class="cifra">{{ total|moneyk }} €</span>
+  </div>
+  <div class="tile">
+    <span class="etiqueta">Jugadores</span>
+    <span class="cifra">{{ filas|length }}</span>
+  </div>
+</div>
+
+{# Ver la plantilla de un rival es media herramienta de este proyecto, asi que
+   el selector va arriba y no escondido. #}
+<section>
+  <p class="sub">
+    Ver la de:
+    {% for p in participantes %}
+      <a href="/plantilla?de={{ p.name|urlencode }}"
+         {% if p.id == manager.id %}style="font-weight:600"{% endif %}>{{ p.name }}</a>{{ ' · ' if not loop.last }}
+    {% endfor %}
+  </p>
+  {{ m.lista(filas, vacio='Sin datos de esta plantilla.') }}
+</section>
+{% endblock %}

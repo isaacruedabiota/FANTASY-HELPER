@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block contenido %}
+{{ m.lista(filas, vacio=vacio) }}
+{% endblock %}

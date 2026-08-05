@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block contenido %}
+<section>
+  <h2>Clasificación y saldo</h2>
+  <p class="sub">
+    Mister solo publica tu propio saldo. El del resto sale de una identidad que
+    se mantiene sola: 50M menos el valor de su plantilla de hoy menos lo gastado
+    en subir cláusulas.
+  </p>
+  <div class="tabla-scroll">
+    <table>
+      <thead>
+        <tr><th>Participante</th><th>Pts</th><th>Jug.</th><th>Plantilla</th><th>Saldo est.</th><th>Real</th></tr>
+      </thead>
+      <tbody>
+        {% set saldo_por_id = {} %}
+        {% for s in saldos %}{% set _ = saldo_por_id.update({s.id: s}) %}{% endfor %}
+        {% for fila in clasificacion %}
+          {% set s = saldo_por_id.get(fila.id) %}
+          <tr>
+            <td>{% if fila.is_me %}<strong>{{ fila.name }}</strong>{% else %}{{ fila.name }}{% endif %}</td>
+            <td>{{ fila.points if fila.points is not none else '–' }}</td>
+            <td>{{ fila.squad_size }}</td>
+            <td>{{ s.valor_plantilla|money if s else '–' }}</td>
+            <td>{{ s.saldo_estimado|money if s else '–' }}</td>
+            <td>{{ s.saldo_real|money if s and s.saldo_real else '–' }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>Bonificaciones</h2>
+  <p class="sub">Transcritas de la pantalla de ajustes; no hay forma de leerlas por API.</p>
+  <div class="tabla-scroll">
+    <table>
+      <tbody>
+        <tr><td>Por punto</td><td>{{ reglas.per_point|money }} €</td></tr>
+        <tr><td>Por jugador en el once ideal</td><td>{{ reglas.per_ideal_xi_player|money }} €</td></tr>
+        <tr><td>Por acierto de quiniela</td><td>{{ reglas.per_quiniela_hit|money }} €</td></tr>
+        {% for puesto, importe in reglas.by_matchday_rank|dictsort %}
+          <tr><td>{{ puesto }}º de la jornada</td><td>{{ importe|money }} €</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="nota">
+    La escala por puesto va al revés a propósito, para igualar la competición:
+    el primero cobra menos que el último. Consecuencia para el modelo: los saldos
+    tienden a converger, así que una mala jornada duele menos de lo que parece.
+  </p>
+</section>
+
+<section>
+  <h2>Movimientos</h2>
+  {% if movimientos %}
+    <div class="tabla-scroll">
+      <table>
+        <tbody>
+          {% for ev in movimientos %}
+            <tr>
+              <td>{{ ev.summary|replace(' | ', ' ')|truncate(70) }}</td>
+              <td>{{ ev.first_seen[:10] }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="vacio">Todavía no se ha registrado ningún movimiento.</p>
+  {% endif %}
+</section>
+{% endblock %}

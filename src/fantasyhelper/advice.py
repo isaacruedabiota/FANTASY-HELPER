@@ -47,6 +47,8 @@ def weekly_euros(
     *,
     rules: BonusRules | None = None,
     model: market.MomentumModel | None = None,
+    points: dict[int, dict] | None = None,
+    values: dict[int, dict] | None = None,
 ) -> list[dict]:
     """Anade a cada jugador lo que genera en una semana, en euros.
 
@@ -54,12 +56,16 @@ def weekly_euros(
     muy distinta: los puntos salen de un historico de temporadas y la
     revalorizacion de una correlacion medida a siete dias. Ver una cifra sin sus
     dos mitades invita a fiarse de ella mas de lo que toca.
+
+    `points` y `values` permiten pasar los dos modelos ya calculados. Sin eso,
+    enriquecer cuatro listas recorre el historico cuatro veces para llegar a los
+    mismos numeros.
     """
     reglas = rules if rules is not None else load_rules(conn)
     euros_por_punto = reglas.per_point
 
-    filas = xpts.attach(conn, rows, cost_field="market_value")
-    filas = market.attach(conn, filas, model=model)
+    filas = xpts.attach(conn, rows, cost_field="market_value", predictions=points)
+    filas = market.attach(conn, filas, model=model, predictions=values)
 
     for fila in filas:
         puntos = fila.get("xpts")
@@ -127,36 +133,37 @@ def briefing(
     modelo = model or market.calibrate(conn)
     reglas = rules if rules is not None else load_rules(conn)
 
-    mios = weekly_euros(
-        conn, queries.squad(conn, manager_id), rules=reglas, model=modelo
-    )
+    # Los dos modelos, una sola vez. Antes cada una de las cuatro listas los
+    # recalculaba por su cuenta y el resumen tardaba cinco veces mas de lo
+    # necesario, cosa que en la Raspberry se nota y en una peticion web mas.
+    puntos = xpts.expected_points(conn)
+    valores = market.forecast(conn, model=modelo)
+
+    def enriquecer(filas: list) -> list[dict]:
+        return weekly_euros(
+            conn, filas, rules=reglas, model=modelo, points=puntos, values=valores
+        )
+
+    mios = enriquecer(queries.squad(conn, manager_id))
     # Fuera los que no tienen ninguna de las dos mitades: no saber lo que rinde
     # un jugador no es motivo para recomendar venderlo.
     vendibles = [f for f in mios if f["rendimiento_semanal"] is not None]
     vendibles.sort(key=_rendimiento)
 
     disponibles = [
-        fila for fila in weekly_euros(
-            conn, queries.all_players(conn), rules=reglas, model=modelo
-        )
+        fila for fila in enriquecer(queries.all_players(conn))
         if not fila["owner"]
         and fila["rendimiento_semanal"] is not None
         and (budget is None or (fila["market_value"] or 0) <= budget)
     ]
     disponibles.sort(key=_rendimiento, reverse=True)
 
-    objetivos = weekly_euros(
-        conn,
-        queries.clause_targets(conn, manager_id=manager_id, budget=budget),
-        rules=reglas, model=modelo,
+    objetivos = enriquecer(
+        queries.clause_targets(conn, manager_id=manager_id, budget=budget)
     )
     objetivos.sort(key=_rendimiento, reverse=True)
 
-    riesgo = _amenazados(
-        weekly_euros(
-            conn, queries.clause_risk(conn, manager_id), rules=reglas, model=modelo
-        )
-    )
+    riesgo = _amenazados(enriquecer(queries.clause_risk(conn, manager_id)))
 
     return {
         "euros_por_punto": reglas.per_point,

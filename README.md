@@ -25,7 +25,8 @@ primer día, sin esperar a acumular histórico propio.
 | 1 | Consultas por CLI: plantilla, mercado, cláusulas, chollos, ficha | **funcionando** |
 | 2a | Puntos esperados (xPts) y euros por punto | **funcionando** |
 | 2b | Recomendación diaria: puntos y valor en la misma moneda | **funcionando** |
-| 2c | Once óptimo y web | pendiente |
+| 2c | Web de consulta, servida desde la Raspberry | **funcionando** |
+| 2d | Once óptimo | pendiente |
 | 3 | Modelo de valor de mercado entrenado con el histórico | **funcionando** |
 | 4 | Segundo adapter (Biwenger / LaLiga Fantasy) | pendiente |
 
@@ -105,6 +106,7 @@ fh estado            # cuántos días de histórico llevas y si falta alguno
 fh dudas             # jugadores cuyo cruce entre fuentes no es seguro
 fh reconciliar       # unifica equipos y jugadores entre fuentes (ya va en capturar)
 fh planificador      # deja la captura automática corriendo
+fh web               # la web, en http://pi-isaac.local:8129
 
 fh mister historico  # ficha completa de cada jugador (valores, temporadas, calendario)
 fh mister reprocesar # relee las fichas guardadas sin hacer ni una petición
@@ -196,6 +198,30 @@ Dos avisos. Solo entra el pago por punto, que es lo único atribuible a un jugad
 el once ideal y la quiniela no dependen de nadie en particular. Y la escala por puesto de
 esta liga va al revés, así que **sumar puntos te reduce ese otro ingreso** — pasar de
 último a primero cuesta 1,2M de bonificación, que a 75.000 € el punto son dieciséis puntos.
+
+## La web
+
+```bash
+pip install -e '.[web]'
+fh web                       # escucha en toda la red local, puerto 8129
+```
+
+Pensada primero para el móvil, que es donde se mira el mercado de verdad: las listas son
+tarjetas y no tablas, porque una tabla de doce columnas no se lee en una pantalla de cinco
+pulgadas. **No lleva contraseña**, así que no la expongas a internet tal cual.
+
+Es una capa de presentación y nada más: todo el SQL sigue en `queries.py` y todo el cálculo
+en `xpts`, `market` y `advice`. Si una cifra sale distinta en la web y en la CLI, es un
+fallo.
+
+Los gráficos son SVG generado en el servidor, sin ninguna librería: la Raspberry no sirve
+200 KB de JavaScript por visita y el gráfico se ve aunque el móvil vaya mal de red. Las
+etiquetas de los ejes van en HTML **encima** del SVG y no dentro, porque el dibujo se
+estira a lo ancho y el texto saldría aplastado — se vio en la primera captura de pantalla.
+
+Hay también un API JSON (`/api/hoy`, `/api/jugadores`, `/api/salud`) pensada para lo que
+venga después: un bot que avise por la mañana, o una extensión que meta el dato dentro del
+propio Mister.
 
 ## Conectar Mister
 

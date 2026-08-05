@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block contenido %}
+{# Una sola cifra de portada: el saldo, que condiciona todo lo demas. #}
+<div class="tiles">
+  <div class="tile hero">
+    <span class="etiqueta">Saldo</span>
+    <span class="cifra">{{ saldo|money }} €</span>
+  </div>
+  <div class="tile">
+    <span class="etiqueta">Plantilla</span>
+    <span class="cifra">{{ valor_plantilla|moneyk }} €</span>
+  </div>
+  <div class="tile">
+    <span class="etiqueta">Jugadores</span>
+    <span class="cifra">{{ jugadores }}</span>
+  </div>
+</div>
+
+<section>
+  <h2>Comprar</h2>
+  <p class="sub">Libres que caben en tu saldo, por lo que generan a la semana.</p>
+  {{ m.lista(datos.comprar, vacio='Ningún libre cabe en tu saldo ahora mismo.') }}
+</section>
+
+<section>
+  <h2>Clausular</h2>
+  <p class="sub">Lo mismo, pagando la cláusula a su dueño.</p>
+  {{ m.lista(datos.clausulas, coste='clause_value',
+             vacio='Ninguna cláusula cabe en tu saldo.') }}
+</section>
+
+<section>
+  <h2>Vender</h2>
+  <p class="sub">Los tuyos que menos generan.</p>
+  {{ m.lista(datos.vender, vacio='Aún no hay datos de tu plantilla.') }}
+</section>
+
+<section>
+  <h2>Blindar</h2>
+  <p class="sub">En cuántas semanas recuperaría un rival lo que pagase por ellos.</p>
+  {{ m.lista(datos.blindar, tipo='semanas', coste='clause_value',
+             vacio='Ninguno de los tuyos sale a cuenta robar ahora mismo.') }}
+</section>
+
+<p class="nota">
+  <strong>€/sem</strong> suma lo que paga la liga por los puntos esperados
+  ({{ datos.euros_por_punto|money }} € cada uno) y lo que se espera que suba de
+  valor. Ojo: en esta liga la bonificación por puesto va al revés, así que sumar
+  puntos reduce ese otro ingreso.
+</p>
+{% endblock %}

@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block contenido %}
+<div class="tiles">
+  <div class="tile hero">
+    <span class="etiqueta">Valor</span>
+    <span class="cifra">{{ jugador.market_value|money }} €</span>
+  </div>
+  <div class="tile">
+    <span class="etiqueta">Puntos esperados</span>
+    <span class="cifra">{{ jugador.xpts|points }}</span>
+  </div>
+  <div class="tile">
+    <span class="etiqueta">Genera a la semana</span>
+    <span class="cifra">{{ m.euros(jugador.rendimiento_semanal, cero=true) }}<small>/sem</small></span>
+  </div>
+</div>
+
+<section>
+  <h2>Valor de mercado</h2>
+  <p class="sub">
+    {{ jugador.position or '?' }} · {{ jugador.team or '?' }} ·
+    {% if jugador.owner %}de {{ jugador.owner }}{% else %}libre{% endif %}
+    {%- if jugador.clause_value %} · cláusula {{ jugador.clause_value|money }} €{% endif %}
+  </p>
+  <div class="chart-card">
+    {% if grafico.empty %}
+      <p class="vacio">Sin histórico suficiente para dibujar la serie.</p>
+    {% else %}
+      <div class="plot">
+        {{ grafico.svg|safe }}
+        {# Etiquetas fuera del SVG: el dibujo se estira y el texto no. #}
+        {% for t in grafico.ticks %}
+          <span class="tick-y" style="top: {{ t.top }}%">{{ t.label }}</span>
+        {% endfor %}
+        <span class="marker" id="marcador"></span>
+        <div class="tooltip"></div>
+      </div>
+      <div class="eje-x">
+        <span>{{ grafico.desde }}</span><span>{{ grafico.hasta }}</span>
+      </div>
+    {% endif %}
+  </div>
+  <p class="sub" style="margin-top:8px">
+    {% for opcion in [30, 90, 365] %}
+      <a href="?dias={{ opcion }}" {% if dias == opcion %}style="font-weight:600"{% endif %}>{{ opcion }} días</a>{{ ' · ' if not loop.last }}
+    {% endfor %}
+  </p>
+</section>
+
+{% if temporadas %}
+<section>
+  <h2>Rendimiento por temporada</h2>
+  <p class="sub">Los partidos se deducen de puntos ÷ media: Mister no los publica.</p>
+  <div class="tabla-scroll">
+    <table>
+      <thead><tr><th>Temporada</th><th>Puntos</th><th>Media</th><th>Partidos</th></tr></thead>
+      <tbody>
+        {% for t in temporadas %}
+          <tr>
+            <td>{{ t.season }}</td>
+            <td>{{ t.points }}</td>
+            <td>{{ '%.2f'|format(t.avg_points or 0) }}</td>
+            <td>{{ t.matches_played }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+{# La tabla completa de valores: el tooltip enriquece, nunca es la unica via
+   para leer una cifra. #}
+<details>
+  <summary>Ver los {{ historico|length }} valores en tabla</summary>
+  <div class="tabla-scroll">
+    <table>
+      <thead><tr><th>Fecha</th><th>Valor</th></tr></thead>
+      <tbody>
+        {% for h in historico|reverse %}
+          <tr><td>{{ h.snapshot_date }}</td><td>{{ h.market_value|money }} €</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</details>
+{% endblock %}
+
+{% block scripts %}
+<script type="application/json" id="puntos-grafico">{{ grafico.points|tojson }}</script>
+<script src="/static/chart.js"></script>
+{% endblock %}
