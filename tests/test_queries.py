@@ -165,3 +165,47 @@ def test_clasificacion_marca_quien_soy(db, liga):
     filas = queries.standings(db)
     assert [f["name"] for f in filas] == ["Glok", "Rival"]
     assert filas[0]["is_me"] == 1
+
+
+# --- la ventana de `latest_value` -------------------------------------------
+
+def test_el_ultimo_valor_no_se_pierde_por_la_ventana(db):
+    """`latest_value` solo mira un mes atras, y eso no puede dejar a nadie fuera.
+
+    La ventana existe por rendimiento: sin ella la consulta recorre el historico
+    entero -mas de 130.000 filas- en cada peticion. Este test fija el contrato:
+    quien tenga valor reciente tiene que aparecer, con historico viejo o sin el.
+    """
+    from fantasyhelper.queries import LATEST_VALUE_WINDOW_DAYS
+
+    pid = repo.resolve_player(db, provider="mister", external_id="a", name="Uno")
+    # Un ano de historico y el valor de hoy.
+    for dia in range(0, 365, 7):
+        repo.record_player_value(
+            db, provider="mister", source="mister", player_id=pid,
+            market_value=1_000_000 + dia,
+            snapshot_date=f"2025-{1 + dia // 31:02d}-{1 + dia % 28:02d}",
+        )
+    repo.record_player_value(db, provider="mister", source="mister",
+                             player_id=pid, market_value=5_000_000,
+                             snapshot_date="2026-08-04")
+
+    fila = next(f for f in queries.all_players(db) if f["id"] == pid)
+    assert fila["market_value"] == 5_000_000, "debe ganar el mas reciente"
+    assert LATEST_VALUE_WINDOW_DAYS >= 7, "una ventana corta se comeria a los recientes"
+
+
+def test_quien_lleva_meses_sin_valor_queda_fuera(db):
+    """Es el efecto buscado: quien ya no esta en el catalogo no es un jugador vivo."""
+    vivo = repo.resolve_player(db, provider="mister", external_id="a", name="Vivo")
+    ido = repo.resolve_player(db, provider="mister", external_id="b", name="Ido")
+    repo.record_player_value(db, provider="mister", source="mister",
+                             player_id=vivo, market_value=1_000_000,
+                             snapshot_date="2026-08-04")
+    repo.record_player_value(db, provider="mister", source="mister",
+                             player_id=ido, market_value=2_000_000,
+                             snapshot_date="2026-01-04")
+
+    nombres = {f["name"] for f in queries.all_players(db)}
+    assert "Vivo" in nombres
+    assert "Ido" not in nombres

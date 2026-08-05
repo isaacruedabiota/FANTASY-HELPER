@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from fantasyhelper import market
+from fantasyhelper import market, xpts
 
 log = logging.getLogger(__name__)
 
@@ -89,4 +89,19 @@ def momentum_model(conn: sqlite3.Connection) -> market.MomentumModel:
     """El modelo de valor, calibrado como mucho una vez por captura."""
     return CACHE.get(
         "market", data_fingerprint(conn), lambda: market.calibrate(conn)
+    )
+
+
+def predictions(conn: sqlite3.Connection) -> tuple[dict, dict]:
+    """Puntos esperados y prediccion de valor de todos, ya calculados.
+
+    Las dos salidas dependen solo de los datos capturados, no de quien pregunte,
+    asi que se pueden compartir entre peticiones. La de valor recorre el
+    historico entero y era medio segundo por pantalla.
+    """
+    huella = data_fingerprint(conn)
+    modelo = momentum_model(conn)
+    return (
+        CACHE.get("xpts", huella, lambda: xpts.expected_points(conn)),
+        CACHE.get("forecast", huella, lambda: market.forecast(conn, model=modelo)),
     )

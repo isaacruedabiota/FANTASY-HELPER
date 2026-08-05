@@ -121,6 +121,8 @@ def briefing(
     limit: int = 8,
     rules: BonusRules | None = None,
     model: market.MomentumModel | None = None,
+    points: dict[int, dict] | None = None,
+    values: dict[int, dict] | None = None,
 ) -> dict:
     """Las cuatro decisiones del dia, ya resueltas.
 
@@ -136,8 +138,8 @@ def briefing(
     # Los dos modelos, una sola vez. Antes cada una de las cuatro listas los
     # recalculaba por su cuenta y el resumen tardaba cinco veces mas de lo
     # necesario, cosa que en la Raspberry se nota y en una peticion web mas.
-    puntos = xpts.expected_points(conn)
-    valores = market.forecast(conn, model=modelo)
+    puntos = points if points is not None else xpts.expected_points(conn)
+    valores = values if values is not None else market.forecast(conn, model=modelo)
 
     def enriquecer(filas: list) -> list[dict]:
         return weekly_euros(

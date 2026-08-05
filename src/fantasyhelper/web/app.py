@@ -30,7 +30,7 @@ from fantasyhelper.bonuses import load_rules
 from fantasyhelper.config import settings
 from fantasyhelper.storage.db import connect
 from fantasyhelper.web import charts
-from fantasyhelper.web.cache import CACHE, momentum_model
+from fantasyhelper.web.cache import CACHE, momentum_model, predictions
 
 log = logging.getLogger(__name__)
 
@@ -74,9 +74,10 @@ def inicio(request: Request):
     try:
         me = _me(conn)
         saldo = queries.my_balance(conn)
+        puntos, valores = predictions(conn)
         datos = advice.briefing(
             conn, manager_id=me["id"], budget=saldo, limit=6,
-            model=momentum_model(conn),
+            model=momentum_model(conn), points=puntos, values=valores,
         )
         plantilla = queries.squad(conn, me["id"])
         return _pagina(
@@ -106,8 +107,9 @@ def plantilla(request: Request, de: str | None = None):
                 raise HTTPException(404, f"No hay ningun participante llamado {de}.")
             manager = fila
 
+        puntos, valores = predictions(conn)
         filas = advice.weekly_euros(
-            conn, queries.squad(conn, manager["id"]), model=momentum_model(conn)
+            conn, queries.squad(conn, manager["id"]), points=puntos, values=valores
         )
         filas.sort(key=lambda f: f["rendimiento_semanal"] or -1, reverse=True)
         return _pagina(
@@ -126,8 +128,9 @@ def plantilla(request: Request, de: str | None = None):
 def mercado(request: Request):
     conn = _conn()
     try:
+        puntos, valores = predictions(conn)
         filas = advice.weekly_euros(
-            conn, queries.market(conn), model=momentum_model(conn)
+            conn, queries.market(conn), points=puntos, values=valores
         )
         filas.sort(key=lambda f: f["rendimiento_semanal"] or -1, reverse=True)
         return _pagina(request, "lista.html", titulo="Mercado de hoy", filas=filas,
@@ -142,8 +145,10 @@ def valor(request: Request):
     conn = _conn()
     try:
         modelo = momentum_model(conn)
+        _, valores = predictions(conn)
         filas = [
-            f for f in market.attach(conn, queries.all_players(conn), model=modelo)
+            f for f in market.attach(
+                conn, queries.all_players(conn), predictions=valores)
             if f.get("ventaja") is not None
         ]
         filas.sort(key=lambda f: -f["euros_ventaja"])
@@ -186,8 +191,9 @@ def jugador(request: Request, player_id: int, dias: int = 365):
         if fila is None:
             raise HTTPException(404, "Ese jugador no esta en la base de datos.")
 
+        puntos, valores = predictions(conn)
         enriquecida = advice.weekly_euros(
-            conn, [fila], model=momentum_model(conn)
+            conn, [fila], points=puntos, values=valores
         )[0]
         historico = queries.value_history(conn, player_id, days=dias)
         temporadas = conn.execute(
@@ -218,9 +224,10 @@ def api_hoy():
     conn = _conn()
     try:
         me = _me(conn)
+        puntos, valores = predictions(conn)
         datos = advice.briefing(
             conn, manager_id=me["id"], budget=queries.my_balance(conn),
-            model=momentum_model(conn),
+            model=momentum_model(conn), points=puntos, values=valores,
         )
         return {
             clave: [
@@ -238,8 +245,9 @@ def api_jugadores():
     """Todos los jugadores con xPts y prediccion de valor, para uso externo."""
     conn = _conn()
     try:
+        puntos, valores = predictions(conn)
         return advice.weekly_euros(
-            conn, queries.all_players(conn), model=momentum_model(conn)
+            conn, queries.all_players(conn), points=puntos, values=valores
         )
     finally:
         conn.close()

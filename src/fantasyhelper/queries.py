@@ -22,11 +22,24 @@ UNKNOWN_PROBABILITY = 0.2
 #: por alguien que no puede jugar.
 UNAVAILABLE = ("lesionado", "sancionado", "no_disponible")
 
+#: Dias hacia atras que mira `latest_value` para dar con el ultimo valor.
+#:
+#: Sin este tope, la ventana recorre el historico ENTERO -mas de 130.000 filas
+#: tras el backfill- cada vez que alguien pide una consulta, y la pantalla de
+#: resumen lo hace cuatro veces. En la Raspberry eso eran casi cuatro segundos
+#: por peticion. Con el tope son unas pocas miles de filas.
+#:
+#: Un mes es holgado: la captura escribe el valor de todos los jugadores del
+#: catalogo a diario, asi que en la practica el ultimo valor es el de hoy. Solo
+#: se quedaria fuera quien lleve un mes sin aparecer en el catalogo, que es
+#: exactamente quien ya no juega en la liga.
+LATEST_VALUE_WINDOW_DAYS = 30
+
 #: Ultimo valor conocido de cada jugador.
 #: Un jugador puede tener valor de dos procedencias el mismo dia (leido de
 #: Mister y leido de FutbolFantasy); se prefiere el de Mister por ser la fuente
 #: primaria, y el otro sirve de respaldo cuando aun no lo hemos visto en Mister.
-LATEST_VALUE_CTE = """
+LATEST_VALUE_CTE = f"""
 latest_value AS (
     SELECT player_id, market_value, delta_1d, snapshot_date,
            ROW_NUMBER() OVER (
@@ -36,6 +49,9 @@ latest_value AS (
            ) AS rn
     FROM player_value_snapshot
     WHERE provider = 'mister'
+      AND snapshot_date >= date(
+          (SELECT MAX(snapshot_date) FROM player_value_snapshot),
+          '-{LATEST_VALUE_WINDOW_DAYS} day')
 )
 """
 
