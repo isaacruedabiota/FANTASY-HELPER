@@ -1,0 +1,34 @@
+# Web de consulta. Servicio aparte del que captura: si la web se cae o se
+# reinicia, la captura diaria -que es lo unico irrecuperable- no se entera.
+#
+#   sudo cp deploy/fantasyhelper-web.service /etc/systemd/system/
+#   sudo systemctl enable --now fantasyhelper-web@isaac
+[Unit]
+Description=FantasyHelper web (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/fantasyhelper
+ExecStart=/home/%i/fantasyhelper/.venv/bin/fh web --puerto 8129
+Restart=on-failure
+RestartSec=20
+
+# La Raspberry comparte memoria con el servidor de Minecraft, asi que la web
+# tiene techo: antes que competir por la RAM, prefiero que se reinicie sola.
+MemoryMax=320M
+
+# Endurecido: la web solo lee la base de datos, no necesita nada mas.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/%i/fantasyhelper/data
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
