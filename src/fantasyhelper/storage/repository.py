@@ -30,9 +30,18 @@ def upsert_team(
 ) -> int:
     slug = slugify(name)
     conn.execute(
-        "INSERT INTO team (slug, name, short_name) VALUES (?, ?, ?) "
-        "ON CONFLICT (slug) DO UPDATE SET name = excluded.name, "
-        "short_name = COALESCE(excluded.short_name, team.short_name)",
+        """
+        INSERT INTO team (slug, name, short_name) VALUES (?, ?, ?)
+        ON CONFLICT (slug) DO UPDATE SET
+            -- Un nombre que es su propio slug no es un nombre: es lo que da
+            -- FutbolFantasy, que identifica al equipo por la URL
+            -- ('rayo-vallecano'). Mister si publica el nombre completo, y sin
+            -- esta guarda la siguiente captura lo pisaba y volvia a dejar
+            -- 'REAL-SOCIEDAD' en pantalla.
+            name = CASE WHEN excluded.name = team.slug THEN team.name
+                        ELSE excluded.name END,
+            short_name = COALESCE(excluded.short_name, team.short_name)
+        """,
         (slug, name, short_name),
     )
     team_id = conn.execute("SELECT id FROM team WHERE slug = ?", (slug,)).fetchone()["id"]

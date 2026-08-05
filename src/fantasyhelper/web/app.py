@@ -247,10 +247,7 @@ def liga(request: Request):
             reglas=load_rules(conn),
             # Todos, sin tope. El feed crece unas pocas tarjetas al dia y
             # cortarlo escondia justo lo que se busca al mirarlo.
-            movimientos=[
-                queries.describe_event(ev)
-                for ev in queries.feed_events(conn, limit=None)
-            ],
+            movimientos=queries.movements(conn),
         )
     finally:
         conn.close()

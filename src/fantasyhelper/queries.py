@@ -708,6 +708,31 @@ def describe_event(row: sqlite3.Row) -> dict:
     return datos
 
 
+#: Tarjetas del feed que no son movimientos de la liga.
+#:
+#: Se siguen guardando todas -esa es la razon de ser de `feed_event`- pero no
+#: se ensenan: son la maquetacion de Mister colandose por el parser.
+#:
+#:   card-footer          el boton de "Comentar" de otra tarjeta
+#:   card-promo           publicidad del propio Mister
+#:   card-market_unified  el widget del mercado del dia, que ya tiene pantalla
+CHROME_KINDS = ("card-footer", "card-promo", "card-market_unified")
+
+
+def movements(conn: sqlite3.Connection, *, limit: int | None = None) -> list[dict]:
+    """Los movimientos de la liga, ya legibles y sin la basura de la interfaz."""
+    huecos = ", ".join("?" * len(CHROME_KINDS))
+    sql = (
+        f"SELECT * FROM feed_event WHERE COALESCE(kind, '') NOT IN ({huecos}) "
+        "ORDER BY first_seen DESC, id DESC"
+    )
+    params: list[object] = list(CHROME_KINDS)
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    return [describe_event(fila) for fila in conn.execute(sql, params)]
+
+
 def feed_kinds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Tipos de movimiento vistos hasta ahora y cuantos hay de cada uno."""
     return conn.execute(

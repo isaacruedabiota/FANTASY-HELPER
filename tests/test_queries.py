@@ -333,3 +333,47 @@ def test_una_tarjeta_que_no_es_un_traspaso_se_deja_como_esta(db):
     ev = queries.describe_event(queries.feed_events(db)[0])
     assert ev["jugador"] is None
     assert ev["texto"] == "R Rida se unió a tu liga 2h"
+
+
+def test_los_movimientos_no_traen_la_maquetacion_de_mister(db):
+    """El feed mezcla movimientos con trozos de interfaz.
+
+    'Comentar' es el pie de otra tarjeta, 'promo' es publicidad y
+    'market_unified' es el widget del mercado, que ya tiene su propia pantalla.
+    Se guardan igual -por si algun dia sirven- pero no se ensenan.
+    """
+    for kind, resumen in (
+        ("card-transfer", "Uno | cambia de | A | a | B"),
+        ("card-footer", "Comentar"),
+        ("card-promo", "Juega por 76K Creditos"),
+        ("card-market_unified", "0 | S. Comesana | 8.349.000"),
+        ("card-player_transfer", "Ter Stegen | abandona la competicion | 0"),
+        ("card-admin", "El administrador ha desactivado el capitan"),
+    ):
+        repo.record_feed_event(db, league_id=None, external_id=kind, kind=kind,
+                               summary=resumen, html="<div></div>")
+
+    tipos = {m["kind"] for m in queries.movements(db)}
+    assert tipos == {"card-transfer", "card-player_transfer", "card-admin"}
+    # Guardados siguen estando todos: el crudo no se toca.
+    assert len(queries.feed_events(db, limit=None)) == 6
+
+
+def test_un_nombre_de_equipo_bueno_no_se_degrada_a_su_slug(db):
+    """FutbolFantasy identifica al equipo por la URL: 'rayo-vallecano'.
+
+    Mister si publica 'Rayo Vallecano'. Sin esta guarda, la captura siguiente
+    pisaba el nombre bueno y en pantalla volvia a salir 'RAYO-VALLECANO'.
+    """
+    equipo = repo.upsert_team(db, name="rayo-vallecano")
+    repo.rename_team(db, team_id=equipo, name="Rayo Vallecano")
+    assert db.execute("SELECT name FROM team WHERE id=?", (equipo,)).fetchone()[0] == (
+        "Rayo Vallecano"
+    )
+
+    # La siguiente captura de FutbolFantasy vuelve a pasar el slug.
+    repo.upsert_team(db, name="rayo-vallecano")
+
+    assert db.execute("SELECT name FROM team WHERE id=?", (equipo,)).fetchone()[0] == (
+        "Rayo Vallecano"
+    )
