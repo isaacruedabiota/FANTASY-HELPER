@@ -82,3 +82,62 @@ def test_las_marcas_del_eje_son_numeros_redondos():
     marcas = charts._nice_ticks(1_000_000, 5_000_000)
     assert marcas == sorted(marcas)
     assert all(m % 1_000_000 == 0 for m in marcas), "nada de 1.234.567 en un eje"
+
+
+# --- el boton de actualizar -------------------------------------------------
+
+def test_actualizar_es_post_y_no_get(cliente):
+    """Un GET con efectos lo dispara cualquier precarga del navegador."""
+    assert cliente.get("/api/capturar").status_code == 200, "el GET solo consulta"
+    assert cliente.request("PUT", "/api/capturar").status_code == 405
+
+
+def test_el_estado_dice_de_cuando_son_los_datos(cliente):
+    datos = cliente.get("/api/capturar").json()
+    assert datos["corriendo"] is False
+    assert "ultima_captura" in datos
+
+
+def test_no_se_lanzan_dos_capturas_a_la_vez():
+    """Dos pulsaciones seguidas no pueden arrancar dos capturas."""
+    from fantasyhelper.web.tasks import CaptureRunner
+
+    corredor = CaptureRunner()
+    corredor._state.running = True
+
+    arrancada, motivo = corredor.start()
+    assert not arrancada
+    assert "marcha" in motivo
+
+
+def test_no_se_pisa_a_la_captura_programada(db, monkeypatch, tmp_path):
+    """El planificador corre en OTRO proceso; el candado va en la base de datos."""
+    from fantasyhelper.storage import db as db_module
+    from fantasyhelper.storage import repository as repo
+    from fantasyhelper.web import tasks
+
+    repo.start_job(db, tasks.JOB_NAME)  # queda en 'running'
+    monkeypatch.setattr(tasks, "connect", lambda: db_module.connect(tmp_path / "test.db"))
+
+    arrancada, motivo = tasks.CaptureRunner().start()
+    assert not arrancada
+    assert "programada" in motivo
+
+
+def test_una_captura_colgada_no_bloquea_para_siempre(db):
+    """Si el servicio muere a media captura, su fila se queda en 'running'."""
+    from fantasyhelper.web.tasks import other_capture_running
+
+    db.execute(
+        "INSERT INTO job_run (job_name, started_at, status) VALUES (?, ?, 'running')",
+        ("daily_snapshot", "2020-01-01T00:00:00Z"),
+    )
+    assert not other_capture_running(db), "una de hace anos no cuenta como viva"
+
+
+def test_una_captura_recien_arrancada_si_bloquea(db):
+    from fantasyhelper.storage import repository as repo
+    from fantasyhelper.web.tasks import other_capture_running
+
+    repo.start_job(db, "daily_snapshot")
+    assert other_capture_running(db)

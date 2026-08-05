@@ -31,6 +31,7 @@ from fantasyhelper.config import settings
 from fantasyhelper.storage.db import connect
 from fantasyhelper.web import charts
 from fantasyhelper.web.cache import CACHE, momentum_model, predictions
+from fantasyhelper.web.tasks import RUNNER
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +51,27 @@ templates.env.filters["points"] = display.points
 templates.env.globals["settings"] = settings
 
 
+def _ultima_captura(conn: sqlite3.Connection) -> str | None:
+    """Cuando se leyo Mister por ultima vez.
+
+    Se mira la fuente Mister y no la fecha maxima a secas: la captura de las
+    19:00 solo refresca los onces de FutbolFantasy, asi que la fecha global
+    diria "hoy" con los valores y las clausulas de la madrugada.
+    """
+    fila = conn.execute(
+        "SELECT MAX(captured_at) AS t FROM player_value_snapshot "
+        "WHERE provider = 'mister' AND source = 'mister'"
+    ).fetchone()
+    return fila["t"] if fila else None
+
+
+def _pagina_con_estado(request: Request, plantilla: str, conn, **contexto):
+    """Toda pagina lleva en la cabecera cuando se capturo por ultima vez."""
+    contexto["ultima_captura"] = _ultima_captura(conn)
+    contexto["captura"] = RUNNER.state().as_dict()
+    return templates.TemplateResponse(request, plantilla, contexto)
+
+
 def _conn() -> sqlite3.Connection:
     return connect()
 
@@ -63,8 +85,7 @@ def _me(conn: sqlite3.Connection):
     return me
 
 
-def _pagina(request: Request, plantilla: str, **contexto) -> HTMLResponse:
-    return templates.TemplateResponse(request, plantilla, contexto)
+
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -80,8 +101,8 @@ def inicio(request: Request):
             model=momentum_model(conn), points=puntos, values=valores,
         )
         plantilla = queries.squad(conn, me["id"])
-        return _pagina(
-            request, "hoy.html",
+        return _pagina_con_estado(
+            request, "hoy.html", conn,
             titulo="Hoy",
             me=me,
             saldo=saldo,
@@ -112,8 +133,8 @@ def plantilla(request: Request, de: str | None = None):
             conn, queries.squad(conn, manager["id"]), points=puntos, values=valores
         )
         filas.sort(key=lambda f: f["rendimiento_semanal"] or -1, reverse=True)
-        return _pagina(
-            request, "plantilla.html",
+        return _pagina_con_estado(
+            request, "plantilla.html", conn,
             titulo=f"Plantilla de {manager['name']}",
             filas=filas,
             manager=manager,
@@ -133,8 +154,9 @@ def mercado(request: Request):
             conn, queries.market(conn), points=puntos, values=valores
         )
         filas.sort(key=lambda f: f["rendimiento_semanal"] or -1, reverse=True)
-        return _pagina(request, "lista.html", titulo="Mercado de hoy", filas=filas,
-                       vacio="No hay mercado capturado todavia.")
+        return _pagina_con_estado(
+            request, "lista.html", conn, titulo="Mercado de hoy", filas=filas,
+            vacio="No hay mercado capturado todavia.")
     finally:
         conn.close()
 
@@ -152,8 +174,8 @@ def valor(request: Request):
             if f.get("ventaja") is not None
         ]
         filas.sort(key=lambda f: -f["euros_ventaja"])
-        return _pagina(
-            request, "valor.html",
+        return _pagina_con_estado(
+            request, "valor.html", conn,
             titulo="Valor de mercado",
             modelo=modelo,
             deriva=market.band_drift(conn),
@@ -169,8 +191,8 @@ def valor(request: Request):
 def liga(request: Request):
     conn = _conn()
     try:
-        return _pagina(
-            request, "liga.html",
+        return _pagina_con_estado(
+            request, "liga.html", conn,
             titulo="La liga",
             clasificacion=queries.standings(conn),
             saldos=queries.estimated_balances(conn),
@@ -202,8 +224,8 @@ def jugador(request: Request, player_id: int, dias: int = 365):
             (player_id,),
         ).fetchall()
 
-        return _pagina(
-            request, "jugador.html",
+        return _pagina_con_estado(
+            request, "jugador.html", conn,
             titulo=fila["name"],
             jugador=enriquecida,
             temporadas=temporadas,
@@ -211,6 +233,32 @@ def jugador(request: Request, player_id: int, dias: int = 365):
             historico=historico,
             dias=dias,
         )
+    finally:
+        conn.close()
+
+
+# --- actualizar los datos ---------------------------------------------------
+
+
+@app.post("/api/capturar")
+def api_capturar(solo: str | None = None):
+    """Arranca una captura y devuelve enseguida, sin esperar a que termine.
+
+    Es POST y no GET a proposito: un GET lo dispara cualquier cosa que precargue
+    enlaces -el navegador, un lector de RSS, el propio movil-, y esto sale a la
+    red contra Mister. Una accion con efectos no puede colgar de un enlace.
+    """
+    fuentes = (solo,) if solo else ("mister", "futbolfantasy")
+    arrancada, motivo = RUNNER.start(fuentes)
+    return {"arrancada": arrancada, "motivo": motivo, **RUNNER.state().as_dict()}
+
+
+@app.get("/api/capturar")
+def api_capturar_estado():
+    """Como va la captura. La pagina lo consulta cada pocos segundos."""
+    conn = _conn()
+    try:
+        return {**RUNNER.state().as_dict(), "ultima_captura": _ultima_captura(conn)}
     finally:
         conn.close()
 

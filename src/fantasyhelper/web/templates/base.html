@@ -12,7 +12,15 @@
 </head>
 <body>
   <header class="top">
-    <h1>{{ titulo }}</h1>
+    <div class="fila-titulo">
+      <h1>{{ titulo }}</h1>
+      {# La antiguedad del dato y el boton van juntos: enterarse de que los
+         numeros son de hace diez horas y poder arreglarlo es el mismo gesto. #}
+      <div class="captura">
+        <span id="antiguedad" data-captura="{{ ultima_captura or '' }}"></span>
+        <button id="btn-actualizar" type="button">Actualizar</button>
+      </div>
+    </div>
     <nav>
       {% set rutas = [("/", "Hoy"), ("/plantilla", "Plantilla"), ("/mercado", "Mercado"),
                       ("/valor", "Valor"), ("/liga", "Liga")] %}
@@ -24,6 +32,8 @@
   <main>
     {% block contenido %}{% endblock %}
   </main>
+  <script id="estado-captura" type="application/json">{{ captura|tojson }}</script>
+  <script src="/static/captura.js"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

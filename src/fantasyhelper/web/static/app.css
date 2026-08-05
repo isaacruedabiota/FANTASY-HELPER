@@ -69,10 +69,60 @@ header.top {
   padding: 10px 14px 0;
 }
 
+.fila-titulo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
 header.top h1 {
   font-size: 17px;
-  margin: 0 0 8px;
+  margin: 0;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* La antiguedad del dato y el boton, juntos: enterarse de que los numeros son
+ * viejos y poder arreglarlo tiene que ser el mismo gesto. */
+.captura {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.captura span {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.captura span.trabajando { color: var(--serie); }
+
+.captura button {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--plane);
+  border: 1px solid var(--axis);
+  border-radius: 7px;
+  /* 32px de alto: por debajo de eso un boton se falla con el pulgar. */
+  min-height: 32px;
+  padding: 0 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.captura button:hover:not(:disabled) { border-color: var(--serie); }
+.captura button:disabled { opacity: 0.55; cursor: default; }
+
+/* En pantallas estrechas el "hace X h" estorba al titulo; manda el boton. */
+@media (max-width: 380px) {
+  .captura span { display: none; }
+  .captura span.trabajando { display: inline; }
 }
 
 nav {
