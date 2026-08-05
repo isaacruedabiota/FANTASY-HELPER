@@ -27,12 +27,14 @@ from fantasyhelper.adapters.mister.parsers import (
     parse_next_fixture,
     parse_player_search,
     parse_players,
+    parse_schedule,
     parse_season_history,
     parse_standings,
     parse_team_names,
     parse_user_config,
     parse_user_squad,
     parse_value_history,
+    real_team_id,
 )
 from fantasyhelper.config import settings
 from fantasyhelper.storage import repository as repo
@@ -340,30 +342,25 @@ class MisterAdapter:
         actual y el proximo partido con sede y hora, que es de donde sale el
         calendario. Se guarda todo de una vez porque la peticion ya esta hecha.
         """
-        escrito = {"valores": 0, "temporadas": 0, "jornadas": 0, "partidos": 0}
+        escrito = {
+            "valores": 0, "temporadas": 0, "jornadas": 0,
+            "partidos": 0, "calendario": 0,
+        }
 
         # Lo primero, porque todo lo demas resuelve equipos por alias: aqui es
         # donde 'mister-team-9' pasa a llamarse Sevilla.
-        #
-        # El equipo del propio jugador se trata aparte y manda sobre el resto:
-        # sabemos a la vez que numero le da Mister y cual es su equipo canonico,
-        # asi que el enlace es directo y no hay que fiarse del nombre. Para los
-        # rivales del proximo partido solo tenemos el nombre, que basta para
-        # crearlos pero puede escribirse distinto en cada fuente.
         nombres = parse_team_names(payload)
         equipo = ((payload.get("data") or {}).get("player") or {}).get("team") or {}
-        propio = str(equipo["id"]) if equipo.get("id") is not None else None
+        # `real_team_id` y no el id a secas: el equipo 0 de Mister significa "sin
+        # club". Enlazarlo era lo que creaba un alias '0' que luego la
+        # reconciliacion fundia con un equipo real, y desde ahi cualquier
+        # jugador sin club pasaba a ser de ese equipo.
+        propio = real_team_id(equipo.get("id"))
         canonico = conn.execute(
             "SELECT team_id FROM player WHERE id = ?", (player_id,)
         ).fetchone()
-
-        if propio and canonico and canonico["team_id"]:
-            reconcile.link_team_alias(
-                conn, provider=self.provider,
-                external_id=propio, team_id=canonico["team_id"],
-            )
-            if nombres.get(propio):
-                repo.rename_team(conn, team_id=canonico["team_id"], name=nombres[propio])
+        del_jugador = canonico["team_id"] if canonico else None
+        self._resolve_team(conn, player_id, propio, del_jugador, nombres)
 
         for external_id, name in nombres.items():
             if external_id == propio:
@@ -418,9 +415,122 @@ class MisterAdapter:
                     home_team_id=home, away_team_id=away,
                     kickoff_utc=fixture.kickoff_utc,
                 )
+                # El mismo partido, visto desde cada equipo. Aqui si se sabe la
+                # sede, asi que rellena la que el calendario deja en blanco.
+                for equipo_id, rival_id, en_casa in (
+                    (home, away, True), (away, home, False)
+                ):
+                    repo.record_schedule(
+                        conn, season=settings.season, matchday=fixture.matchday,
+                        team_id=equipo_id, opponent_id=rival_id, is_home=en_casa,
+                    )
                 escrito["partidos"] += 1
 
+        escrito["calendario"] += self._store_schedule(conn, payload, player_id)
         return escrito
+
+    def _resolve_team(
+        self,
+        conn: sqlite3.Connection,
+        player_id: int,
+        propio: str | None,
+        del_jugador: int | None,
+        nombres: dict[str, str],
+    ) -> None:
+        """Casa el numero de equipo de la ficha con el equipo canonico.
+
+        Hay dos formas de leer la misma ficha y no dan lo mismo:
+
+          - el numero de equipo es nuevo -> lo que sabemos es el equipo del
+            jugador, y sirve para ponerle nombre a ese numero. Es lo que
+            convierte 'mister-team-9' en Sevilla.
+          - el numero de equipo ya se conoce -> manda el, y lo que ha cambiado
+            es el jugador: se ha traspasado.
+
+        Confundirlas costo caro. Se repuntaba el alias al equipo del jugador
+        SIEMPRE, asi que cuando Moussa Diarra se fue del Alaves al Malaga, el
+        alias del Malaga paso a apuntar al Alaves, y con el se llevo el
+        calendario entero: el Alaves aparecia jugando contra los rivales del
+        Malaga en dieciseis jornadas seguidas.
+        """
+        if not propio:
+            return
+
+        conocido = repo.team_id_for_alias(
+            conn, provider=self.provider, external_id=propio
+        )
+
+        if conocido is None:
+            # Numero sin identificar: el jugador le pone nombre.
+            if del_jugador:
+                reconcile.link_team_alias(
+                    conn, provider=self.provider,
+                    external_id=propio, team_id=del_jugador,
+                )
+                conocido = del_jugador
+        elif del_jugador and del_jugador != conocido:
+            # `resolve_player` fija el equipo la primera vez y no lo pisa nunca,
+            # asi que sin esto un traspaso no se entera nadie.
+            log.info(
+                "el jugador %s cambia de equipo: %s -> %s",
+                player_id, del_jugador, conocido,
+            )
+            repo.set_player_team(conn, player_id=player_id, team_id=conocido)
+
+        if conocido and nombres.get(propio):
+            repo.rename_team(conn, team_id=conocido, name=nombres[propio])
+
+    def _store_schedule(
+        self, conn: sqlite3.Connection, payload: dict, player_id: int
+    ) -> int:
+        """Guarda el calendario de rivales del equipo de este jugador.
+
+        Con una ficha por equipo basta para tener la rejilla entera, pero se
+        graba en todas: son escrituras idempotentes y asi el calendario esta
+        completo aunque un dia fallen algunas peticiones.
+        """
+        externo, partidos = parse_schedule(payload)
+        if not partidos:
+            return 0
+
+        # El equipo lo manda la FICHA, no lo que la base de datos crea que es el
+        # equipo del jugador. Esos rivales son los del equipo que la ficha dice,
+        # por construccion.
+        #
+        # Fiarse del jugador estuvo mal y se noto: Moussa Diarra se habia ido
+        # del Alaves al Malaga y su `team_id` seguia en Alaves, asi que el
+        # calendario del Malaga se escribio encima del del Alaves y este quedo
+        # jugando contra rivales que no eran los suyos.
+        equipo = (
+            repo.team_id_for_alias(conn, provider=self.provider, external_id=externo)
+            if externo
+            else None
+        )
+        if equipo is None:
+            fila = conn.execute(
+                "SELECT team_id FROM player WHERE id = ?", (player_id,)
+            ).fetchone()
+            equipo = fila["team_id"] if fila else None
+        if equipo is None:
+            return 0
+
+        escritos = 0
+        for partido in partidos:
+            rival = repo.team_id_for_alias(
+                conn, provider=self.provider,
+                external_id=partido.opponent_external_id,
+            )
+            # Un equipo no juega contra si mismo: si el escudo del rival
+            # coincide con el propio es que el alias aun apunta mal, y escribir
+            # eso ensuciaria el calendario con partidos imposibles.
+            if rival is None or rival == equipo:
+                continue
+            repo.record_schedule(
+                conn, season=settings.season, matchday=partido.matchday,
+                team_id=equipo, opponent_id=rival,
+            )
+            escritos += 1
+        return escritos
 
     def reprocess_cards(self, conn: sqlite3.Connection) -> tuple[int, dict[str, int]]:
         """Relee las fichas ya descargadas y extrae lo que en su dia no se guardo.
@@ -437,7 +547,10 @@ class MisterAdapter:
         }
 
         procesadas = 0
-        total = {"valores": 0, "temporadas": 0, "jornadas": 0, "partidos": 0}
+        total = {
+            "valores": 0, "temporadas": 0, "jornadas": 0,
+            "partidos": 0, "calendario": 0,
+        }
         for _, endpoint, content in iter_raw(
             conn, source=self.provider, endpoint_like="ajax/players/%"
         ):
@@ -505,7 +618,10 @@ class MisterAdapter:
         log.info("ficha pendiente para %d jugadores", len(targets))
 
         processed = 0
-        total = {"valores": 0, "temporadas": 0, "jornadas": 0, "partidos": 0}
+        total = {
+            "valores": 0, "temporadas": 0, "jornadas": 0,
+            "partidos": 0, "calendario": 0,
+        }
         for target in targets:
             payload = self.client.fetch_json(
                 conn,
@@ -538,6 +654,10 @@ class MisterAdapter:
             manager_id = repo.upsert_manager(
                 conn, league_id=league_id, external_id=manager.external_id,
                 name=manager.name,
+            )
+            repo.record_manager_avatar(
+                conn, manager_id=manager_id, url=manager.avatar_url,
+                color=manager.avatar_color, initials=manager.avatar_initials,
             )
             repo.record_manager_state(
                 conn,
@@ -615,7 +735,11 @@ class MisterAdapter:
                 name=self.user.name, is_me=True,
             )
             repo.record_manager_state(
-                conn, manager_id=manager_id, balance=self.user.balance
+                conn,
+                manager_id=manager_id,
+                balance=self.user.balance,
+                future_balance=self.user.future_balance,
+                max_debt=self.user.max_debt,
             )
             log.info(
                 "soy %s en '%s', saldo %s €",

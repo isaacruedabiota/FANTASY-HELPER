@@ -295,9 +295,30 @@ def _absorb_player(conn: sqlite3.Connection, *, source_id: int, target_id: int) 
     conn.execute("DELETE FROM player WHERE id = ?", (source_id,))
 
 
+def drop_void_team_alias(conn: sqlite3.Connection) -> int:
+    """Borra el alias del equipo 0 de Mister, que no es un equipo.
+
+    Mister le pone el equipo 0 -que llama 'void'- a quien no tiene club. Se
+    tomo por un equipo real, se creo un 'mister-team-0' y la reconciliacion
+    acabo fundiendolo con un equipo de verdad por parecido de nombre; a partir
+    de ahi, todo jugador sin club pasaba a ser de ese equipo.
+
+    El parser ya no lo deja entrar, pero el alias sigue en las bases que ya lo
+    tienen y hay que quitarlo. Va aqui y no en una migracion porque es un dato
+    mal cruzado, no un cambio de esquema, y este es el sitio donde se arreglan
+    los cruces.
+    """
+    return conn.execute(
+        "DELETE FROM team_alias WHERE provider = 'mister' AND external_id = '0'"
+    ).rowcount
+
+
 def reconcile(conn: sqlite3.Connection) -> ReconcileReport:
     """Unifica equipos y jugadores entre fuentes. Idempotente."""
     report = ReconcileReport()
+
+    if borrados := drop_void_team_alias(conn):
+        log.info("alias del equipo 'void' de Mister eliminados: %d", borrados)
 
     # Primero los que se resuelven solos por el nombre que da la ficha, y
     # despues los que hay que deducir votando con jugadores ya cruzados.

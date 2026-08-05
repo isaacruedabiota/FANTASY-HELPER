@@ -1,13 +1,34 @@
 {% extends "base.html" %}
-{% import "_macros.html" as m %}
+{% import "_macros.html" as m with context %}
 
 {% block contenido %}
-{# Una sola cifra de portada: el saldo, que condiciona todo lo demas. #}
+{# El saldo manda, y a su lado las dos cifras que lo matizan: lo que queda
+   comprometido y hasta donde deja la liga endeudarse. El disponible a secas
+   engana con pujas en el aire. #}
 <div class="tiles">
   <div class="tile hero">
     <span class="etiqueta">Saldo</span>
     <span class="cifra">{{ saldo|money }} €</span>
   </div>
+  <div class="tile">
+    <span class="etiqueta">Saldo futuro</span>
+    <span class="cifra">
+      {%- if cartera and cartera.future_balance is not none -%}
+        {{ cartera.future_balance|moneyk }} €
+      {%- else -%}<span class="meta">–</span>{%- endif -%}
+    </span>
+  </div>
+  <div class="tile">
+    <span class="etiqueta">Deuda máxima</span>
+    <span class="cifra">
+      {%- if cartera and cartera.max_debt -%}
+        {{ cartera.max_debt|moneyk }} €
+      {%- else -%}<span class="meta">–</span>{%- endif -%}
+    </span>
+  </div>
+</div>
+
+<div class="tiles">
   <div class="tile">
     <span class="etiqueta">Plantilla</span>
     <span class="cifra">{{ valor_plantilla|moneyk }} €</span>
@@ -20,8 +41,12 @@
 
 <section>
   <h2>Comprar</h2>
-  <p class="sub">Libres que caben en tu saldo, por lo que generan a la semana.</p>
-  {{ m.lista(datos.comprar, vacio='Ningún libre cabe en tu saldo ahora mismo.') }}
+  <p class="sub">
+    Del mercado de hoy, lo que más rinde en las próximas jornadas
+    {%- if tope %} sin pasar de {{ tope|moneyk }} €{% endif %}.
+  </p>
+  {{ m.lista(datos.comprar, coste='asking_price', vendedor=true,
+             vacio='Nada del mercado de hoy cabe en tu saldo.') }}
 </section>
 
 <section>
@@ -49,5 +74,10 @@
   ({{ datos.euros_por_punto|money }} € cada uno) y lo que se espera que suba de
   valor. Ojo: en esta liga la bonificación por puesto va al revés, así que sumar
   puntos reduce ese otro ingreso.
+  <br><br>
+  Los escudos de cada tarjeta son los rivales de las próximas jornadas, y es por
+  ese calendario por lo que se ordenan <strong>Comprar</strong> y
+  <strong>Clausular</strong>: un fichaje se tiene varias semanas, no un domingo.
+  Verde es rival cómodo, rojo complicado.
 </p>
 {% endblock %}

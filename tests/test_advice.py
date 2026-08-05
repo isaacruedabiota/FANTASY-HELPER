@@ -36,7 +36,10 @@ def liga(db):
     repo.upsert_fixture(db, season="2026-27", matchday=1,
                         home_team_id=equipo, away_team_id=contrario)
 
-    def fichar(nombre, *, media=None, valores=None, dueno=None, probabilidad=0.9):
+    def fichar(
+        nombre, *, media=None, valores=None, dueno=None, probabilidad=0.9,
+        en_mercado=False, precio=None,
+    ):
         valores = valores or [5_000_000] * DIAS
         pid = repo.resolve_player(db, provider="mister", external_id=nombre,
                                   name=nombre, team_id=equipo, position="DL")
@@ -56,6 +59,13 @@ def liga(db):
             repo.record_ownership(db, league_id=league_id, player_id=pid,
                                   manager_id=dueno, clause_value=7_500_000,
                                   clause_level=0, clause_floor=5_000_000)
+        # Estar en venta es una condicion aparte de tener dueno: en el mercado
+        # del dia hay libres que pone el juego y jugadores que pone un rival.
+        if en_mercado:
+            repo.record_market_listing(
+                db, league_id=league_id, player_id=pid, seller_id=dueno,
+                asking_price=precio or valores[-1],
+            )
         return pid
 
     return {"yo": yo, "rival": rival, "fichar": fichar, "league_id": league_id}
@@ -162,15 +172,49 @@ def test_no_se_recomienda_vender_lo_que_no_se_conoce(db, liga):
     assert "Sin datos" not in [f["name"] for f in datos["vender"]]
 
 
-def test_solo_se_compran_los_libres_que_caben_en_el_saldo(db, liga):
-    liga["fichar"]("Caro", media=5.0, valores=[7_000_000] * DIAS)
-    liga["fichar"]("Asequible", media=5.0, valores=[3_500_000] * DIAS)
-    liga["fichar"]("De otro", media=5.0, dueno=liga["rival"])
+def test_solo_se_compra_lo_que_cabe_en_el_saldo(db, liga):
+    liga["fichar"]("Caro", media=5.0, valores=[7_000_000] * DIAS, en_mercado=True)
+    liga["fichar"]("Asequible", media=5.0, valores=[3_500_000] * DIAS, en_mercado=True)
 
     nombres = [f["name"] for f in advice.briefing(
         db, manager_id=liga["yo"], budget=4_000_000,
         rules=REGLAS, model=MODELO)["comprar"]]
     assert nombres == ["Asequible"]
+
+
+def test_solo_se_compra_lo_que_esta_hoy_en_el_mercado(db, liga):
+    """En Mister no se ficha a quien te apetece, sino de la lista del dia.
+
+    Antes salia aqui cualquier jugador sin dueno del catalogo entero -mas de
+    quinientos-, y la inmensa mayoria no se podian fichar aunque sobrase saldo.
+    """
+    liga["fichar"]("En venta", media=5.0, en_mercado=True)
+    liga["fichar"]("Libre pero fuera del mercado", media=6.0)
+
+    nombres = [f["name"] for f in advice.briefing(
+        db, manager_id=liga["yo"], rules=REGLAS, model=MODELO)["comprar"]]
+    assert nombres == ["En venta"]
+
+
+def test_no_se_recomienda_comprar_lo_que_ya_es_tuyo(db, liga):
+    """Los propios aparecen en el mercado cuando los pones tu a la venta."""
+    liga["fichar"]("Mio en venta", media=6.0, dueno=liga["yo"], en_mercado=True)
+    liga["fichar"]("De un rival", media=5.0, dueno=liga["rival"], en_mercado=True)
+
+    nombres = [f["name"] for f in advice.briefing(
+        db, manager_id=liga["yo"], rules=REGLAS, model=MODELO)["comprar"]]
+    assert nombres == ["De un rival"]
+
+
+def test_el_precio_pedido_manda_sobre_el_valor_de_mercado(db, liga):
+    """Un rival puede pedir mas de lo que vale, y es lo que hay que pagar."""
+    liga["fichar"]("Sobrevalorado", media=5.0, dueno=liga["rival"],
+                   en_mercado=True, precio=9_000_000)
+
+    nombres = [f["name"] for f in advice.briefing(
+        db, manager_id=liga["yo"], budget=6_000_000,
+        rules=REGLAS, model=MODELO)["comprar"]]
+    assert nombres == [], "vale 5M pero piden 9M, y no caben en el saldo"
 
 
 def test_el_aviso_de_blindaje_ignora_a_los_suplentes(db, liga):

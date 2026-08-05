@@ -212,11 +212,19 @@ h2 {
 
 .lista { display: flex; flex-direction: column; gap: 6px; }
 
+/* Areas con nombre y no colocacion implicita: la foto ocupa las tres filas por
+ * la izquierda, y la fila del calendario desaparece sola cuando un jugador no
+ * lo tiene, sin necesidad de una clase distinta de tarjeta. */
 .card {
   display: grid;
   /* minmax(0,1fr) y no 1fr: sin el minimo a cero, un nombre largo empuja la
    * columna derecha fuera de la tarjeta y el numero se corta. */
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "retrato nombre     principal"
+    "retrato meta       cifras"
+    "retrato calendario calendario";
+  align-items: center;
   gap: 1px 10px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -226,6 +234,99 @@ h2 {
 
 .card:hover { border-color: var(--axis); }
 .card > * { min-width: 0; }
+
+.card .retrato { grid-area: retrato; }
+.card .nombre { grid-area: nombre; }
+.card .principal { grid-area: principal; }
+.card .meta { grid-area: meta; }
+.card .cifras { grid-area: cifras; }
+.card .calendario { grid-area: calendario; }
+
+/* --- foto del jugador y escudo -------------------------------------------- */
+
+/* Las fotos vienen del CDN de Mister recortadas sobre fondo transparente, asi
+ * que necesitan un circulo debajo para no quedar flotando. */
+.retrato {
+  position: relative;
+  display: block;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+}
+
+.retrato .cara {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  object-fit: cover;
+  /* Arriba, que es donde esta la cara: `cover` centrado le corta la frente. */
+  object-position: 50% 0;
+  background: var(--plane);
+  display: block;
+}
+
+/* El escudo, abajo a la izquierda y por fuera del circulo, como en Mister.
+ * El anillo del color de la tarjeta lo separa de la foto: sin el, un escudo
+ * oscuro sobre una camiseta oscura se pierde. */
+.retrato .escudo {
+  position: absolute;
+  left: -3px;
+  bottom: -2px;
+  width: 17px;
+  height: 17px;
+  object-fit: contain;
+  background: var(--surface);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.5px var(--surface);
+}
+
+.escudo-solo {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  vertical-align: middle;
+}
+
+/* Local o visitante. Chip y no un simbolo pegado al nombre: el nombre del
+ * equipo se lee mejor limpio, y asi la sede se puede omitir donde no se sepa
+ * en vez de dar por hecho que se juega fuera. */
+.sede {
+  display: inline-block;
+  margin-left: 3px;
+  padding: 0 3px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--ink-2);
+  background: var(--plane);
+  border: 1px solid var(--border);
+}
+
+/* --- calendario de las proximas jornadas ---------------------------------- */
+
+/* Tres escudos que dicen contra quien se juega las proximas jornadas. El color
+ * de la barra inferior gradua la dificultad, y el `title` la escribe con
+ * palabras: el color aqui es un refuerzo, nunca el unico portador del dato. */
+.calendario {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.jornada {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: var(--plane);
+  border-bottom: 2px solid var(--axis);
+}
+.jornada.facil { border-bottom-color: var(--sube); }
+.jornada.dificil { border-bottom-color: var(--baja); }
 
 /* Nombre en una sola linea: si no cabe, puntos suspensivos. Partirlo en dos
  * hace la tarjeta el doble de alta y solo caben cuatro en pantalla. */
@@ -274,6 +375,94 @@ h2 {
 .baja { color: var(--baja); }
 .estado { color: var(--aviso); font-weight: 600; }
 
+/* Quien pone al jugador en el mercado. Lo de Mister se compra al momento; lo
+ * de un participante es una puja y compite con los demas, asi que no es el
+ * mismo tipo de decision y se distingue de un vistazo. */
+.vende {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border: 1px solid var(--border);
+  background: var(--plane);
+  color: var(--ink-2);
+}
+.vende.sistema { border-color: var(--serie); color: var(--serie); }
+
+/* --- participantes de la liga --------------------------------------------- */
+
+/* Fila con scroll y no rejilla: en una liga de diez caben tres o cuatro caras
+ * en un movil, y una rejilla de diez obligaria a bajar antes de ver nada. */
+.participantes {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+.participantes::-webkit-scrollbar { display: none; }
+
+.participante {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  width: 66px;
+  padding: 8px 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radio);
+  background: var(--surface);
+}
+.participante.activo { border-color: var(--serie); }
+.participante.activo .quien { font-weight: 600; color: var(--ink); }
+
+.avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+
+/* El circulo con la inicial para quien no ha subido foto: el color lo elige
+ * Mister y viene con el, asi que su cara es la misma aqui que en el juego. */
+.avatar.inicial {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 15px;
+  color: #fff;
+  /* Sombra de texto y no un color calculado: los tonos que reparte Mister van
+   * de amarillos claros a azules oscuros y ningun color fijo contrasta con
+   * todos. */
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.participante .quien {
+  font-size: 11px;
+  color: var(--ink-2);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- cabecera de la ficha de jugador -------------------------------------- */
+
+.ficha {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.ficha strong { display: block; font-size: 17px; }
+.ficha .sub { margin: 0; }
+
 /* --- tablas (solo donde una tabla es la forma correcta) ------------------- */
 
 .tabla-scroll { overflow-x: auto; }
@@ -301,6 +490,19 @@ td {
   border-bottom: 1px solid var(--border);
   text-align: right;
   white-space: nowrap;
+}
+
+/* Los movimientos del feed son frases enteras y hay que dejarlas partir; el
+ * resto de celdas son cifras y siguen sin romperse. */
+td.movimiento {
+  white-space: normal;
+  min-width: 190px;
+  line-height: 1.35;
+}
+td.movimiento .meta {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 tbody tr:hover { background: var(--surface); }

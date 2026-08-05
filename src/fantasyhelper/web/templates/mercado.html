@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+
+{% block contenido %}
+{# Quien vende cambia lo que puedes hacer, no es un adorno: lo que pone Mister
+   se compra al momento y al precio que marca, y lo que pone un participante va
+   por puja y compite con los demas. #}
+<p class="sub">
+  {{ filas|length }} en el mercado · {{ libres }} los pone Mister ·
+  {{ filas|length - libres }} los ponen participantes
+  {%- if propios %} ·
+    {% if mostrando_mios %}
+      <a href="/mercado">ocultar los {{ propios }} míos</a>
+    {% else %}
+      <a href="/mercado?mios=1">ver los {{ propios }} míos</a>
+    {% endif %}
+  {%- endif %}
+</p>
+
+{{ m.lista(filas, coste='asking_price', vendedor=true, vacio=vacio) }}
+{% endblock %}

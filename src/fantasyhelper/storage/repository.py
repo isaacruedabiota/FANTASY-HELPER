@@ -126,6 +126,25 @@ def resolve_player(
     return player_id
 
 
+def set_player_team(
+    conn: sqlite3.Connection, *, player_id: int, team_id: int
+) -> None:
+    """Cambia de equipo a un jugador. Es lo que `resolve_player` NO hace.
+
+    Alli el equipo se fija la primera vez y no se pisa, y con razon: cada fuente
+    numera los equipos a su manera y la primera que lo sepa suele acertar. Pero
+    eso deja fuera los traspasos, y un jugador en el equipo equivocado arrastra
+    con el un calendario que no es el suyo.
+
+    Por eso esto es explicito y se llama solo desde la ficha del jugador, que es
+    la unica fuente que da el equipo por su nombre.
+    """
+    conn.execute(
+        "UPDATE player SET team_id = ?, updated_at = ? WHERE id = ?",
+        (team_id, utcnow(), player_id),
+    )
+
+
 def upsert_league(
     conn: sqlite3.Connection,
     *,
@@ -348,6 +367,8 @@ def record_manager_state(
     *,
     manager_id: int,
     balance: int | None = None,
+    future_balance: int | None = None,
+    max_debt: int | None = None,
     team_value: int | None = None,
     points: int | None = None,
     position: int | None = None,
@@ -355,19 +376,51 @@ def record_manager_state(
     conn.execute(
         """
         INSERT INTO manager_snapshot
-            (snapshot_date, captured_at, manager_id, balance, team_value, points, position)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (snapshot_date, captured_at, manager_id, balance, future_balance,
+             max_debt, team_value, points, position)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         -- COALESCE y no asignacion directa: el estado de un participante se
         -- escribe en dos pasos (la clasificacion da puntos y posicion, la
         -- plantilla da el valor). Sin esto, el segundo borraria lo del primero.
         ON CONFLICT (snapshot_date, manager_id) DO UPDATE SET
             captured_at = excluded.captured_at,
             balance = COALESCE(excluded.balance, manager_snapshot.balance),
+            future_balance = COALESCE(excluded.future_balance,
+                                      manager_snapshot.future_balance),
+            max_debt = COALESCE(excluded.max_debt, manager_snapshot.max_debt),
             team_value = COALESCE(excluded.team_value, manager_snapshot.team_value),
             points = COALESCE(excluded.points, manager_snapshot.points),
             position = COALESCE(excluded.position, manager_snapshot.position)
         """,
-        (today(), utcnow(), manager_id, balance, team_value, points, position),
+        (
+            today(), utcnow(), manager_id, balance, future_balance,
+            max_debt, team_value, points, position,
+        ),
+    )
+
+
+def record_manager_avatar(
+    conn: sqlite3.Connection,
+    *,
+    manager_id: int,
+    url: str | None = None,
+    color: str | None = None,
+    initials: str | None = None,
+) -> None:
+    """Foto de perfil del participante, o el circulo de color que la sustituye.
+
+    Va en `manager` y no en un snapshot: cambiar de foto no es un hecho del dia
+    que interese seguir en el tiempo, es un atributo que se pisa y ya esta.
+    """
+    conn.execute(
+        """
+        UPDATE manager SET
+            avatar_url = COALESCE(?, avatar_url),
+            avatar_color = COALESCE(?, avatar_color),
+            avatar_initials = COALESCE(?, avatar_initials)
+        WHERE id = ?
+        """,
+        (url, color, initials, manager_id),
     )
 
 
@@ -535,6 +588,37 @@ def upsert_fixture(
         "AND home_team_id = ? AND away_team_id = ?",
         (season, matchday, home_team_id, away_team_id),
     ).fetchone()["id"]
+
+
+def record_schedule(
+    conn: sqlite3.Connection,
+    *,
+    season: str,
+    matchday: int,
+    team_id: int,
+    opponent_id: int,
+    is_home: bool | None = None,
+) -> None:
+    """Contra quien juega un equipo una jornada, y donde si se sabe.
+
+    La sede se guarda con COALESCE porque llega mas tarde y por otra via: el
+    calendario de la ficha da el rival de quince jornadas pero no dice donde se
+    juega, y eso solo aparece cuando ese partido pasa a ser el siguiente. Sin el
+    COALESCE, la siguiente captura del calendario borraria la sede recien
+    averiguada.
+    """
+    conn.execute(
+        """
+        INSERT INTO team_schedule (season, matchday, team_id, opponent_id, is_home)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (season, matchday, team_id) DO UPDATE SET
+            opponent_id = excluded.opponent_id,
+            is_home = COALESCE(excluded.is_home, team_schedule.is_home),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        """,
+        (season, matchday, team_id, opponent_id,
+         None if is_home is None else int(is_home)),
+    )
 
 
 # --------------------------------------------------------------------------

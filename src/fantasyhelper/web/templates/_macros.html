@@ -21,18 +21,87 @@
   {%- endif -%}
 {% endmacro %}
 
+{# Foto del jugador con el escudo de su equipo encima.
+
+   Las dos imagenes salen del CDN publico de Mister, que las sirve por id. Se
+   cargan desde el navegador y no a traves de la Raspberry a proposito: son
+   ficheros estaticos que el navegador cachea, y hacerlas pasar por el servidor
+   solo anadiria latencia y trabajo a una maquina que ya va justa.
+
+   `loading=lazy` porque el mercado son setenta jugadores y no se ven de golpe.
+   `onerror` esconde la imagen en vez de dejar el icono de rota: a un fichaje
+   recien llegado puede que el CDN aun no le tenga foto.
+#}
+{% macro foto(fila) %}
+  {%- set jugador = fotos_jugador.get(fila.id) -%}
+  {%- set escudo = fotos_equipo.get(fila.team_id) -%}
+  {%- if jugador or escudo -%}
+    <span class="retrato">
+      {%- if jugador -%}
+        <img class="cara" loading="lazy" alt=""
+             src="https://cdn-mister.mundodeportivo.com/file/cdn-common/players/{{ jugador }}.png"
+             onerror="this.style.visibility='hidden'">
+      {%- endif -%}
+      {%- if escudo -%}
+        <img class="escudo" loading="lazy" alt=""
+             src="https://cdn-mister.mundodeportivo.com/file/cdn-common/teams/{{ escudo }}.png"
+             onerror="this.style.display='none'">
+      {%- endif -%}
+    </span>
+  {%- endif -%}
+{% endmacro %}
+
+{# Escudo suelto, para las listas de rivales del calendario.
+
+   Sin `title` propio: dentro del calendario el rotulo lo lleva el recuadro que
+   lo envuelve, y un `title` vacio en la imagen tapa el del padre. #}
+{% macro escudo(team_id) %}
+  {%- set id = fotos_equipo.get(team_id) -%}
+  {%- if id -%}
+    <img class="escudo-solo" loading="lazy" alt=""
+         src="https://cdn-mister.mundodeportivo.com/file/cdn-common/teams/{{ id }}.png"
+         onerror="this.style.display='none'">
+  {%- endif -%}
+{% endmacro %}
+
+{# El rival, en mayusculas y sin arroba.
+
+   La sede va en una etiqueta aparte -L de local, V de visitante- en vez de en
+   un simbolo pegado al nombre. Un nombre de equipo es un nombre propio y se
+   lee mejor limpio; y donde no se sepa la sede, que es media rejilla del
+   calendario, no aparece nada en vez de dar por hecho que juega fuera. #}
 {% macro rival(fila) %}
   {%- if fila.opponent -%}
-    {{ '@' if not fila.is_home }}{{ fila.opponent }}
+    {{ fila.opponent|upper }}
+    {%- if fila.is_home is not none %}<span class="sede {{ 'casa' if fila.is_home else 'fuera' }}">{{ 'L' if fila.is_home else 'V' }}</span>{% endif -%}
   {%- else -%}–{%- endif -%}
 {% endmacro %}
 
 {# Segunda linea: de donde sale el jugador y en que estado esta. #}
 {% macro contexto(fila) %}
-  {{ fila.team or '?' }} · {{ rival(fila) }}
+  {{ (fila.team or '?')|upper }} · {{ rival(fila) }}
   {%- if fila.probability is not none %} · {{ (fila.probability * 100)|round|int }}%{% endif -%}
   {%- if fila.status and fila.status != 'ok' %}
     <span class="estado">{{ fila.status|replace('_', ' ') }}</span>
+  {%- endif -%}
+{% endmacro %}
+
+{# Los rivales de las proximas jornadas, en escudos.
+
+   Sirve para lo que pedia el ojo y no la tabla: ver de un vistazo si a quien
+   vas a fichar le viene un calendario amable. El color del borde dice si la
+   jornada suma o resta, y el `title` lo escribe con palabras para quien no
+   distinga los tonos. #}
+{% macro calendario(fila) %}
+  {%- if fila.proximas -%}
+    <span class="calendario">
+      {%- for j in fila.proximas -%}
+        <span class="jornada {{ 'facil' if j.factor > 1.02 else 'dificil' if j.factor < 0.98 else 'medio' }}"
+              title="J{{ j.matchday }} · {{ (j.opponent or '?')|upper }}{% if j.is_home is not none %} · {{ 'en casa' if j.is_home else 'fuera' }}{% endif %} · {{ 'facil' if j.factor > 1.02 else 'dificil' if j.factor < 0.98 else 'normal' }}">
+          {{- escudo(j.opponent_id) -}}
+        </span>
+      {%- endfor -%}
+    </span>
   {%- endif -%}
 {% endmacro %}
 
@@ -43,8 +112,9 @@
      semanas      cuanto tarda un rival en amortizar su clausula
    `coste` es el numero pequeno de la esquina: precio, clausula o lo que toque.
 #}
-{% macro tarjeta(fila, tipo='rendimiento', coste='market_value', sufijo='') %}
+{% macro tarjeta(fila, tipo='rendimiento', coste='market_value', sufijo='', vendedor=false) %}
 <a class="card" href="/jugador/{{ fila.id }}">
+  {{ foto(fila) }}
   <span class="nombre"><span class="pos">{{ fila.position or '?' }}</span>{{ fila.name }}</span>
   <span class="principal">
     {%- if tipo == 'semanas' -%}
@@ -55,18 +125,29 @@
       {{ euros(fila.rendimiento_semanal, cero=true) }}<small>/sem</small>
     {%- endif -%}
   </span>
-  <span class="meta">{{ contexto(fila) }}</span>
+  {# El vendedor va DELANTE y no al final. La linea se recorta con puntos
+     suspensivos cuando no cabe, y puesto al final se comia justo lo que se
+     habia venido a mirar: si lo pone Mister -y entonces se compra al momento-
+     o lo pone un participante, que es una puja. #}
+  <span class="meta">
+    {%- if vendedor -%}
+      <span class="vende {{ 'sistema' if not fila.seller else 'rival' }}">
+        {{- 'MISTER' if not fila.seller else fila.seller -}}</span>
+    {%- endif -%}
+    {{ contexto(fila) }}
+  </span>
   <span class="cifras">
     {{- fila[coste]|moneyk }} €{{ sufijo -}}
     {%- if tipo == 'rendimiento' and fila.xpts is not none %} · {{ fila.xpts|points }} pts{% endif -%}
   </span>
+  {{ calendario(fila) }}
 </a>
 {% endmacro %}
 
-{% macro lista(filas, tipo='rendimiento', coste='market_value', vacio='Nada que mostrar.', sufijo='') %}
+{% macro lista(filas, tipo='rendimiento', coste='market_value', vacio='Nada que mostrar.', sufijo='', vendedor=false) %}
   {% if filas %}
     <div class="lista">
-      {% for fila in filas %}{{ tarjeta(fila, tipo, coste, sufijo) }}{% endfor %}
+      {% for fila in filas %}{{ tarjeta(fila, tipo, coste, sufijo, vendedor) }}{% endfor %}
     </div>
   {% else %}
     <p class="vacio">{{ vacio }}</p>

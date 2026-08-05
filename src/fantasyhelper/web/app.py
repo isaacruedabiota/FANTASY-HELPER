@@ -30,7 +30,7 @@ from fantasyhelper.bonuses import load_rules
 from fantasyhelper.config import settings
 from fantasyhelper.storage.db import connect
 from fantasyhelper.web import charts
-from fantasyhelper.web.cache import CACHE, momentum_model, predictions
+from fantasyhelper.web.cache import CACHE, momentum_model, photo_ids, predictions
 from fantasyhelper.web.tasks import RUNNER
 
 log = logging.getLogger(__name__)
@@ -66,9 +66,16 @@ def _ultima_captura(conn: sqlite3.Connection) -> str | None:
 
 
 def _pagina_con_estado(request: Request, plantilla: str, conn, **contexto):
-    """Toda pagina lleva en la cabecera cuando se capturo por ultima vez."""
+    """Toda pagina lleva en la cabecera cuando se capturo por ultima vez.
+
+    Y los mapas de fotos, porque cualquier lista de jugadores los necesita y
+    pasarlos ruta por ruta era garantizar olvidarse en una.
+    """
     contexto["ultima_captura"] = _ultima_captura(conn)
     contexto["captura"] = RUNNER.state().as_dict()
+    jugadores, equipos = photo_ids(conn)
+    contexto.setdefault("fotos_jugador", jugadores)
+    contexto.setdefault("fotos_equipo", equipos)
     return templates.TemplateResponse(request, plantilla, contexto)
 
 
@@ -94,18 +101,37 @@ def inicio(request: Request):
     conn = _conn()
     try:
         me = _me(conn)
-        saldo = queries.my_balance(conn)
+        cartera = queries.my_wallet(conn)
+        saldo = cartera["balance"] if cartera else None
         puntos, valores = predictions(conn)
+
+        # El tope de gasto no es el saldo disponible sino el comprometido, que
+        # es menor si hay pujas en el aire, mas lo que la liga deja deber. Con
+        # el disponible a secas se recomendaban fichajes que no se pueden pagar.
+        tope = None
+        if cartera is not None:
+            tope = (
+                cartera["future_balance"]
+                if cartera["future_balance"] is not None
+                else saldo
+            )
+            if tope is not None and cartera["max_debt"]:
+                tope += cartera["max_debt"]
+
         datos = advice.briefing(
-            conn, manager_id=me["id"], budget=saldo, limit=6,
+            conn, manager_id=me["id"], budget=tope, limit=6,
             model=momentum_model(conn), points=puntos, values=valores,
         )
-        plantilla = queries.squad(conn, me["id"])
+        plantilla = advice.weekly_euros(
+            conn, queries.squad(conn, me["id"]), points=puntos, values=valores
+        )
         return _pagina_con_estado(
             request, "hoy.html", conn,
             titulo="Hoy",
             me=me,
+            cartera=cartera,
             saldo=saldo,
+            tope=tope,
             valor_plantilla=sum(f["market_value"] or 0 for f in plantilla),
             jugadores=len(plantilla),
             datos=datos,
@@ -133,6 +159,11 @@ def plantilla(request: Request, de: str | None = None):
             conn, queries.squad(conn, manager["id"]), points=puntos, values=valores
         )
         filas.sort(key=lambda f: f["rendimiento_semanal"] or -1, reverse=True)
+
+        # La suma de la ventaja esperada, no de "lo que va a subir": el modelo
+        # predice cuanto se aparta cada jugador de los de su precio, y el
+        # movimiento del tramo entero se deja fuera a proposito.
+        previsto = sum(f["euros_ventaja"] for f in filas if f.get("euros_ventaja"))
         return _pagina_con_estado(
             request, "plantilla.html", conn,
             titulo=f"Plantilla de {manager['name']}",
@@ -140,22 +171,39 @@ def plantilla(request: Request, de: str | None = None):
             manager=manager,
             participantes=queries.standings(conn),
             total=sum(f["market_value"] or 0 for f in filas),
+            diario=queries.squad_daily_change(conn).get(manager["id"]),
+            previsto=previsto,
         )
     finally:
         conn.close()
 
 
 @app.get("/mercado", response_class=HTMLResponse)
-def mercado(request: Request):
+def mercado(request: Request, mios: int = 0):
+    """El mercado del dia, sin los propios.
+
+    Los tuyos se ocultan por defecto porque en esa lista no hay nada que
+    decidir: ya son tuyos. Quedan a un clic por si se quiere ver a que precio
+    han salido.
+    """
     conn = _conn()
     try:
+        me = queries.my_manager(conn)
         puntos, valores = predictions(conn)
-        filas = advice.weekly_euros(
+        todos = advice.weekly_euros(
             conn, queries.market(conn), points=puntos, values=valores
         )
+        soy_yo = (lambda f: me is not None and f["seller_id"] == me["id"])
+        propios = [f for f in todos if soy_yo(f)]
+        filas = todos if mios else [f for f in todos if not soy_yo(f)]
         filas.sort(key=lambda f: f["rendimiento_semanal"] or -1, reverse=True)
         return _pagina_con_estado(
-            request, "lista.html", conn, titulo="Mercado de hoy", filas=filas,
+            request, "mercado.html", conn,
+            titulo="Mercado de hoy",
+            filas=filas,
+            propios=len(propios),
+            mostrando_mios=bool(mios),
+            libres=sum(1 for f in filas if not f["seller_id"]),
             vacio="No hay mercado capturado todavia.")
     finally:
         conn.close()
@@ -197,7 +245,12 @@ def liga(request: Request):
             clasificacion=queries.standings(conn),
             saldos=queries.estimated_balances(conn),
             reglas=load_rules(conn),
-            movimientos=queries.feed_events(conn, limit=25),
+            # Todos, sin tope. El feed crece unas pocas tarjetas al dia y
+            # cortarlo escondia justo lo que se busca al mirarlo.
+            movimientos=[
+                queries.describe_event(ev)
+                for ev in queries.feed_events(conn, limit=None)
+            ],
         )
     finally:
         conn.close()

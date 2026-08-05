@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% import "_macros.html" as m %}
+{% import "_macros.html" as m with context %}
 
 {% block contenido %}
 <section>
@@ -57,14 +57,26 @@
 
 <section>
   <h2>Movimientos</h2>
+  <p class="sub">
+    Los {{ movimientos|length }} registrados desde que se captura la liga, del
+    más reciente al más antiguo.
+  </p>
   {% if movimientos %}
     <div class="tabla-scroll">
       <table>
         <tbody>
           {% for ev in movimientos %}
             <tr>
-              <td>{{ ev.summary|replace(' | ', ' ')|truncate(70) }}</td>
-              <td>{{ ev.first_seen[:10] }}</td>
+              <td class="movimiento">
+                {% if ev.jugador %}
+                  <strong>{{ ev.jugador }}</strong>
+                  <span class="meta">{{ ev.origen }} → {{ ev.destino }}</span>
+                {% else %}
+                  {{ ev.texto }}
+                {% endif %}
+              </td>
+              <td>{% if ev.importe %}{{ ev.importe|moneyk }} €{% endif %}</td>
+              <td>{{ ev.fecha }}</td>
             </tr>
           {% endfor %}
         </tbody>

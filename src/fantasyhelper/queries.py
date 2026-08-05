@@ -110,7 +110,7 @@ OWNERSHIP_CTES = f"{BASE_CTES}, {LATEST_OWNERSHIP_CTE}"
 
 #: Columnas comunes de una fila de jugador, ya unidas a sus CTEs.
 PLAYER_COLUMNS = """
-    p.id, p.name, p.position, t.name AS team,
+    p.id, p.name, p.position, p.team_id, t.name AS team,
     v.market_value, v.delta_1d,
     v.market_value - v7.market_value AS change_7d,
     lp.probability, lp.status,
@@ -127,6 +127,38 @@ PLAYER_JOINS = """
 """
 
 
+def mister_ids(conn: sqlite3.Connection) -> tuple[dict[int, str], dict[int, str]]:
+    """({player_id: id en Mister}, {team_id: id en Mister}).
+
+    Es lo que hace falta para pintar la foto de un jugador y el escudo de su
+    equipo: las dos viven en un CDN publico con el id en la ruta.
+
+    Va en dos mapas y no unido a `PLAYER_JOINS` por un motivo concreto: los
+    alias no son unicos por entidad. Hay un equipo con dos alias de Mister -uno
+    de ellos el '0', que en sus respuestas significa "ninguno"- y algun jugador
+    tambien. Un LEFT JOIN a `team_alias` duplicaria esas filas en TODAS las
+    listas de la web, y un jugador repetido en el mercado es mucho peor que
+    quedarse sin su foto.
+
+    De haber varios se toma el id mas bajo por encima de cero, comparado como
+    numero: en texto '9' va despues de '15'.
+    """
+    def mapa(tabla: str, clave: str) -> dict[int, str]:
+        return {
+            fila[clave]: str(fila["external_id"])
+            for fila in conn.execute(
+                f"""
+                SELECT {clave}, MIN(CAST(external_id AS INTEGER)) AS external_id
+                FROM {tabla}
+                WHERE provider = 'mister' AND CAST(external_id AS INTEGER) > 0
+                GROUP BY {clave}
+                """
+            )
+        }
+
+    return mapa("player_alias", "player_id"), mapa("team_alias", "team_id")
+
+
 def my_manager(conn: sqlite3.Connection) -> sqlite3.Row | None:
     """El participante que soy yo, identificado al capturar /team."""
     return conn.execute(
@@ -140,15 +172,27 @@ def my_balance(conn: sqlite3.Connection) -> int | None:
     Mister solo publica el saldo del usuario de la sesion; el de los rivales no
     aparece en ninguna respuesta, asi que esta columna queda vacia para ellos.
     """
-    row = conn.execute(
+    fila = my_wallet(conn)
+    return fila["balance"] if fila else None
+
+
+def my_wallet(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    """Mi saldo, el comprometido y hasta donde deja endeudarse la liga.
+
+    Las tres cifras juntas porque solo juntas dicen algo. El disponible no es lo
+    que puedes gastar: si tienes pujas lanzadas, ese dinero ya esta reservado y
+    el futuro es menor. Y el limite de deuda dice cuanto puedes estirarte por
+    encima de todo eso.
+    """
+    return conn.execute(
         """
-        SELECT s.balance FROM manager_snapshot s
+        SELECT s.balance, s.future_balance, s.max_debt, s.snapshot_date
+        FROM manager_snapshot s
         JOIN manager m ON m.id = s.manager_id
         WHERE m.is_me = 1 AND s.balance IS NOT NULL
         ORDER BY s.snapshot_date DESC LIMIT 1
         """
     ).fetchone()
-    return row["balance"] if row else None
 
 
 def squad(conn: sqlite3.Connection, manager_id: int) -> list[sqlite3.Row]:
@@ -170,14 +214,26 @@ def squad(conn: sqlite3.Connection, manager_id: int) -> list[sqlite3.Row]:
 
 
 def market(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Mercado del dia: quien esta a la venta y a que precio."""
+    """Mercado del dia: quien esta a la venta, a que precio y de quien es.
+
+    `seller_id` a NULL no es un dato que falte: significa que lo vende el propio
+    juego, es decir que el jugador es libre y se compra al momento. Los que
+    vende un participante van por puja y no son lo mismo, de ahi que la
+    distincion se lleve hasta la pantalla.
+
+    Se arrastra tambien la clausula, porque en el mercado aparecen jugadores con
+    dueno y sin ella no se puede comparar pujar contra clausular.
+    """
     return conn.execute(
         f"""
-        {BASE_CTES}
-        SELECT {PLAYER_COLUMNS}, m.asking_price, seller.name AS seller
+        {OWNERSHIP_CTES}
+        SELECT {PLAYER_COLUMNS}, m.asking_price, m.seller_id,
+               seller.name AS seller, o.clause_value, owner.name AS owner
         {PLAYER_JOINS}
         JOIN market_listing_snapshot m ON m.player_id = p.id
         LEFT JOIN manager seller ON seller.id = m.seller_id
+        LEFT JOIN latest_ownership o ON o.player_id = p.id AND o.rn = 1
+        LEFT JOIN manager owner ON owner.id = o.manager_id
         WHERE m.snapshot_date = (SELECT MAX(snapshot_date) FROM market_listing_snapshot)
         ORDER BY lp.probability DESC NULLS LAST, m.asking_price ASC
         """
@@ -291,6 +347,67 @@ def all_players(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def squad_daily_change(conn: sqlite3.Connection) -> dict[int, dict]:
+    """Lo que sube o baja al dia la plantilla de cada participante.
+
+    No se usa `delta_1d`, que es lo que la fuente dice haber variado: viene
+    vacio casi siempre. Se resta el valor de la plantilla de hoy contra el del
+    dia anterior CON DATOS, que no tiene por que ser ayer si un dia fallo la
+    captura; por eso se devuelve tambien cuantos dias abarca y contra que fecha
+    se ha comparado, que es lo unico que permite leer la cifra sin equivocarse.
+
+    La plantilla es la de hoy en las dos fechas, a proposito: asi la cifra es
+    "lo que han subido MIS jugadores" y no se contamina con las compras y ventas
+    del dia, que mueven el valor total sin que nadie se haya revalorizado.
+    """
+    fechas = conn.execute(
+        """
+        SELECT DISTINCT snapshot_date FROM player_value_snapshot
+        WHERE provider = 'mister' AND source = 'mister'
+        ORDER BY snapshot_date DESC LIMIT 2
+        """
+    ).fetchall()
+    if len(fechas) < 2:
+        return {}
+
+    hoy, anterior = fechas[0]["snapshot_date"], fechas[1]["snapshot_date"]
+    filas = conn.execute(
+        """
+        SELECT o.manager_id,
+               SUM(hoy.market_value) AS valor,
+               SUM(hoy.market_value - antes.market_value) AS delta,
+               COUNT(*) AS jugadores
+        FROM ownership_snapshot o
+        JOIN player_value_snapshot hoy
+          ON hoy.player_id = o.player_id AND hoy.provider = 'mister'
+         AND hoy.source = 'mister' AND hoy.snapshot_date = ?
+        JOIN player_value_snapshot antes
+          ON antes.player_id = o.player_id AND antes.provider = 'mister'
+         AND antes.source = 'mister' AND antes.snapshot_date = ?
+        WHERE o.snapshot_date = (SELECT MAX(snapshot_date) FROM ownership_snapshot)
+          AND o.manager_id IS NOT NULL
+        GROUP BY o.manager_id
+        """,
+        (hoy, anterior),
+    ).fetchall()
+
+    dias = conn.execute(
+        "SELECT julianday(?) - julianday(?) AS d", (hoy, anterior)
+    ).fetchone()["d"]
+
+    return {
+        fila["manager_id"]: {
+            "valor": fila["valor"],
+            "delta": fila["delta"],
+            "jugadores": fila["jugadores"],
+            "desde": anterior,
+            "hasta": hoy,
+            "dias": int(dias or 1),
+        }
+        for fila in filas
+    }
+
+
 def find_players(conn: sqlite3.Connection, term: str) -> list[sqlite3.Row]:
     """Busca jugadores por nombre, incluyendo como los llama cada fuente."""
     like = f"%{term}%"
@@ -314,15 +431,37 @@ def find_players(conn: sqlite3.Connection, term: str) -> list[sqlite3.Row]:
 def value_history(
     conn: sqlite3.Connection, player_id: int, *, days: int = 90
 ) -> list[sqlite3.Row]:
-    """Serie de valor de mercado de un jugador, del mas antiguo al mas reciente."""
+    """Serie de valor de mercado de un jugador, del mas antiguo al mas reciente.
+
+    Cada dia trae ademas lo que subio o bajo respecto al anterior. Se calcula
+    aqui con LAG y no restando en la plantilla porque el "dia anterior" es el
+    anterior DE LA SERIE, que no siempre es ayer: si un dia fallo la captura, la
+    diferencia abarca dos dias y decirlo como variacion diaria seria mentir. Por
+    eso viaja tambien el hueco en dias.
+    """
     return conn.execute(
         """
-        SELECT snapshot_date, market_value
-        FROM player_value_snapshot
-        WHERE player_id = ? AND provider = 'mister'
-          AND snapshot_date >= date((SELECT MAX(snapshot_date) FROM player_value_snapshot),
-                                    ?)
-        GROUP BY snapshot_date
+        WITH serie AS (
+            -- Un mismo dia puede tener el valor leido de Mister y el leido de
+            -- FutbolFantasy; manda el de Mister, igual que en `latest_value`.
+            SELECT snapshot_date,
+                   COALESCE(
+                       MAX(CASE WHEN source = 'mister' THEN market_value END),
+                       MAX(market_value)
+                   ) AS market_value
+            FROM player_value_snapshot
+            WHERE player_id = ? AND provider = 'mister'
+              AND snapshot_date >= date(
+                  (SELECT MAX(snapshot_date) FROM player_value_snapshot), ?)
+            GROUP BY snapshot_date
+        )
+        SELECT snapshot_date, market_value,
+               market_value - LAG(market_value) OVER (ORDER BY snapshot_date)
+                   AS delta,
+               julianday(snapshot_date)
+                   - julianday(LAG(snapshot_date) OVER (ORDER BY snapshot_date))
+                   AS dias
+        FROM serie
         ORDER BY snapshot_date
         """,
         (player_id, f"-{int(days)} day"),
@@ -501,17 +640,72 @@ def estimated_balances(conn: sqlite3.Connection) -> list[dict]:
 
 
 def feed_events(
-    conn: sqlite3.Connection, *, kind: str | None = None, limit: int = 30
+    conn: sqlite3.Connection, *, kind: str | None = None, limit: int | None = 30
 ) -> list[sqlite3.Row]:
-    """Movimientos de la liga, del mas reciente al mas antiguo."""
+    """Movimientos de la liga, del mas reciente al mas antiguo.
+
+    `limit=None` los trae todos. El feed crece despacio -unas pocas tarjetas al
+    dia- asi que traerlo entero no es un problema, y cortarlo por veinticinco
+    escondia justo lo que se busca al mirarlo: que paso la semana pasada.
+    """
     sql = "SELECT * FROM feed_event"
     params: list[object] = []
     if kind:
         sql += " WHERE kind LIKE ?"
         params.append(f"%{kind}%")
-    sql += " ORDER BY first_seen DESC, id DESC LIMIT ?"
-    params.append(limit)
+    sql += " ORDER BY first_seen DESC, id DESC"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
     return conn.execute(sql, params).fetchall()
+
+
+#: 'Javi Puado | cambia de | AaronLor | a | Mister | 0 | A | M | 765.450'
+#: El nombre va delante del 'cambia de'; lo que sigue al destino son adornos de
+#: la tarjeta (puntos, iniciales del avatar) y no dicen nada.
+TRANSFER_SUMMARY_RE = re.compile(
+    r"^(?P<jugador>.+?)\s*\|\s*cambia de\s*\|\s*(?P<origen>.+?)\s*\|\s*a\s*\|\s*(?P<destino>[^|]+)"
+)
+
+
+def describe_event(row: sqlite3.Row) -> dict:
+    """Convierte una tarjeta del feed en algo que se pueda leer.
+
+    El texto plano de una tarjeta arrastra la basura de su maquetacion: 'Javi
+    Puado cambia de AaronLor a Mister 0 A M 765.450' lleva pegados los puntos
+    del jugador y la inicial del avatar del participante. Mientras solo se
+    veian veinticinco recortadas daba igual; enseñandolas todas, no.
+
+    Los traspasos se desmontan en sus piezas -quien, de quien a quien y por
+    cuanto- y el resto se deja tal cual: son altas, avisos del administrador y
+    tarjetas cuyo formato aun no se ha mirado, y preferimos texto feo a
+    inventarnos una estructura que no tienen.
+    """
+    resumen = (row["summary"] or "").strip()
+    datos = {
+        "kind": row["kind"],
+        "fecha": (row["first_seen"] or "")[:10],
+        "texto": resumen.replace(" | ", " "),
+        "jugador": None,
+        "origen": None,
+        "destino": None,
+        "importe": None,
+    }
+
+    match = TRANSFER_SUMMARY_RE.match(resumen)
+    if not match:
+        return datos
+
+    importes = json.loads(row["amounts"] or "[]")
+    datos.update(
+        jugador=match.group("jugador").strip(),
+        origen=match.group("origen").strip(),
+        destino=match.group("destino").strip(),
+        # El importe de la operacion es el ultimo numero de la tarjeta; los
+        # anteriores son puntos y otros adornos.
+        importe=importes[-1] if importes else None,
+    )
+    return datos
 
 
 def feed_kinds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -534,6 +728,7 @@ def standings(conn: sqlite3.Connection) -> list[sqlite3.Row]:
             FROM manager_snapshot
         )
         SELECT m.id, m.name, m.is_me, s.points, s.team_value, s.position,
+               m.avatar_url, m.avatar_color, m.avatar_initials,
                (SELECT COUNT(*) FROM ownership_snapshot o
                 WHERE o.manager_id = m.id
                   AND o.snapshot_date = (SELECT MAX(snapshot_date)

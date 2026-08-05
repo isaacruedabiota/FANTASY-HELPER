@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% import "_macros.html" as m %}
+{% import "_macros.html" as m with context %}
 
 {% block contenido %}
 <div class="tiles">
@@ -8,21 +8,61 @@
     <span class="cifra">{{ total|moneyk }} €</span>
   </div>
   <div class="tile">
-    <span class="etiqueta">Jugadores</span>
-    <span class="cifra">{{ filas|length }}</span>
+    <span class="etiqueta">
+      {%- if diario and diario.dias > 1 -%}
+        Últimos {{ diario.dias }} días
+      {%- else -%}Hoy{%- endif -%}
+    </span>
+    <span class="cifra">
+      {%- if diario -%}{{ m.euros(diario.delta, cero=true) }} €
+      {%- else -%}<span class="meta">–</span>{%- endif -%}
+    </span>
+  </div>
+  <div class="tile">
+    <span class="etiqueta">Previsión 7 días</span>
+    <span class="cifra">{{ m.euros(previsto, cero=true) }} €</span>
   </div>
 </div>
 
 {# Ver la plantilla de un rival es media herramienta de este proyecto, asi que
-   el selector va arriba y no escondido. #}
+   el selector va arriba y con la cara de cada uno: en una liga de diez se
+   reconoce antes el avatar que el nombre escrito. #}
 <section>
-  <p class="sub">
-    Ver la de:
+  <h2>Plantillas</h2>
+  <nav class="participantes">
     {% for p in participantes %}
       <a href="/plantilla?de={{ p.name|urlencode }}"
-         {% if p.id == manager.id %}style="font-weight:600"{% endif %}>{{ p.name }}</a>{{ ' · ' if not loop.last }}
+         class="participante{{ ' activo' if p.id == manager.id }}">
+        {% if p.avatar_url %}
+          <img class="avatar" loading="lazy" alt=""
+               src="{{ p.avatar_url }}" onerror="this.style.display='none'">
+        {% else %}
+          {# Sin foto, el circulo de color con la inicial que pinta Mister. #}
+          <span class="avatar inicial"
+                style="background: {{ p.avatar_color or 'var(--axis)' }}">
+            {{- p.avatar_initials or p.name[0]|upper -}}
+          </span>
+        {% endif %}
+        <span class="quien">{{ p.name }}</span>
+      </a>
     {% endfor %}
-  </p>
+  </nav>
+</section>
+
+<section>
   {{ m.lista(filas, vacio='Sin datos de esta plantilla.') }}
 </section>
+
+<p class="nota">
+  <strong>{% if diario and diario.dias > 1 %}Últimos {{ diario.dias }} días
+  {%- else %}Hoy{% endif %}</strong> es lo que han variado estos mismos
+  jugadores desde el {{ diario.desde if diario else '–' }}, no lo que ha
+  cambiado el valor total: así una compra o una venta no se cuela como si
+  alguien se hubiera revalorizado.
+  <br><br>
+  <strong>Previsión 7 días</strong> es cuánto se espera que estos jugadores se
+  aparten de los de su mismo precio, que es lo único que el modelo llegó a
+  medir. No incluye que suba o baje el mercado entero: eso sube y baja también
+  lo que tienen los demás, así que para decidir da igual.
+</p>
 {% endblock %}

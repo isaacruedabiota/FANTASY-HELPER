@@ -209,3 +209,127 @@ def test_quien_lleva_meses_sin_valor_queda_fuera(db):
     nombres = {f["name"] for f in queries.all_players(db)}
     assert "Vivo" in nombres
     assert "Ido" not in nombres
+
+
+# --- la subida diaria y el historico ----------------------------------------
+
+
+def _valores(db, pid, pares):
+    for fecha, valor in pares:
+        repo.record_player_value(db, provider="mister", source="mister",
+                                 player_id=pid, market_value=valor,
+                                 snapshot_date=fecha)
+
+
+def test_el_historico_dice_cuanto_subio_cada_dia(db):
+    pid = repo.resolve_player(db, provider="mister", external_id="a", name="Uno")
+    _valores(db, pid, [("2026-08-01", 1_000_000), ("2026-08-02", 1_100_000),
+                       ("2026-08-03", 1_050_000)])
+
+    filas = queries.value_history(db, pid, days=30)
+    assert [f["delta"] for f in filas] == [None, 100_000, -50_000]
+    assert filas[0]["delta"] is None, "el primero no tiene contra que compararse"
+
+
+def test_un_hueco_en_la_captura_se_declara_en_vez_de_disimularse(db):
+    """Si un dia fallo la captura, la diferencia abarca dos dias.
+
+    Presentarla como variacion diaria seria mentir, asi que viaja tambien el
+    hueco y la pantalla lo escribe.
+    """
+    pid = repo.resolve_player(db, provider="mister", external_id="a", name="Uno")
+    _valores(db, pid, [("2026-08-01", 1_000_000), ("2026-08-04", 1_300_000)])
+
+    filas = queries.value_history(db, pid, days=30)
+    assert filas[-1]["delta"] == 300_000
+    assert filas[-1]["dias"] == 3
+
+
+def test_manda_el_valor_leido_de_mister_cuando_hay_dos(db):
+    """El mismo dia puede traer el valor de Mister y el de FutbolFantasy."""
+    pid = repo.resolve_player(db, provider="mister", external_id="a", name="Uno")
+    repo.record_player_value(db, provider="mister", source="futbolfantasy",
+                             player_id=pid, market_value=9_000_000,
+                             snapshot_date="2026-08-01")
+    repo.record_player_value(db, provider="mister", source="mister",
+                             player_id=pid, market_value=1_000_000,
+                             snapshot_date="2026-08-01")
+
+    filas = queries.value_history(db, pid, days=30)
+    assert filas[0]["market_value"] == 1_000_000
+
+
+def test_la_subida_diaria_de_una_plantilla_ignora_las_compras(db):
+    """Es "lo que han subido MIS jugadores", no "cuanto ha cambiado el total".
+
+    Sin esto, fichar a alguien apareceria como una revalorizacion enorme y
+    venderlo como un desplome, que es justo lo contrario de lo que se mira.
+    """
+    liga = repo.upsert_league(db, provider="mister", external_id="1", name="L")
+    yo = repo.upsert_manager(db, league_id=liga, external_id="10", name="Yo", is_me=True)
+
+    viejo = repo.resolve_player(db, provider="mister", external_id="a", name="Viejo")
+    nuevo = repo.resolve_player(db, provider="mister", external_id="b", name="Nuevo")
+    _valores(db, viejo, [("2026-08-01", 1_000_000), ("2026-08-02", 1_200_000)])
+    # El fichado de hoy no tiene valor de ayer, asi que no puede sumar nada.
+    _valores(db, nuevo, [("2026-08-02", 8_000_000)])
+    # La fecha de la propiedad la pone `record_ownership` (hoy) y es
+    # independiente de las fechas de los valores: lo que compara la consulta son
+    # los dos ultimos dias CON VALORES.
+    for pid in (viejo, nuevo):
+        repo.record_ownership(db, league_id=liga, player_id=pid, manager_id=yo)
+
+    cambio = queries.squad_daily_change(db)[yo]
+    assert cambio["delta"] == 200_000, "solo el que estaba en las dos fechas"
+    assert cambio["dias"] == 1
+
+
+def test_sin_dos_dias_de_datos_no_hay_subida_diaria(db):
+    """El primer dia de vida de la base no se puede comparar con nada."""
+    liga = repo.upsert_league(db, provider="mister", external_id="1", name="L")
+    yo = repo.upsert_manager(db, league_id=liga, external_id="10", name="Yo")
+    pid = repo.resolve_player(db, provider="mister", external_id="a", name="Uno")
+    _valores(db, pid, [("2026-08-02", 1_000_000)])
+    repo.record_ownership(db, league_id=liga, player_id=pid, manager_id=yo)
+
+    assert queries.squad_daily_change(db) == {}
+
+
+def test_el_feed_se_puede_pedir_entero(db):
+    for n in range(40):
+        repo.record_feed_event(db, league_id=None, external_id=f"f{n}",
+                               kind="card-transfer", summary=f"movimiento {n}",
+                               html="<div></div>")
+
+    assert len(queries.feed_events(db, limit=None)) == 40
+    assert len(queries.feed_events(db, limit=10)) == 10
+
+
+def test_un_traspaso_del_feed_se_desmonta_en_sus_piezas(db):
+    """El texto crudo de la tarjeta arrastra la basura de su maquetacion.
+
+    'Javi Puado cambia de AaronLor a Mister 0 A M 765.450' lleva pegados los
+    puntos del jugador y la inicial del avatar del participante.
+    """
+    repo.record_feed_event(
+        db, league_id=None, external_id="f1", kind="card-transfer",
+        summary="Javi Puado | cambia de | AaronLor | a | Mister | 0 | A | M | 765.450",
+        html="<div></div>", amounts=[0, 765_450],
+    )
+
+    ev = queries.describe_event(queries.feed_events(db)[0])
+    assert ev["jugador"] == "Javi Puado"
+    assert ev["origen"] == "AaronLor"
+    assert ev["destino"] == "Mister"
+    assert ev["importe"] == 765_450
+
+
+def test_una_tarjeta_que_no_es_un_traspaso_se_deja_como_esta(db):
+    """Altas y avisos no tienen esa estructura, y no hay que inventarsela."""
+    repo.record_feed_event(db, league_id=None, external_id="f2", kind="card-join",
+                           summary="R Rida | se unió a tu liga | 2h",
+                           html="<div></div>")
+
+    ev = queries.describe_event(queries.feed_events(db)[0])
+    assert ev["jugador"] is None
+    assert ev["texto"] == "R Rida se unió a tu liga 2h"

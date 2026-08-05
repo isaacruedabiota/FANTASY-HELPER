@@ -30,6 +30,11 @@ def test_las_paginas_que_no_dependen_de_ti_responden(cliente):
         assert cliente.get(ruta).status_code == 200, ruta
 
 
+def test_el_mercado_admite_ver_los_propios(cliente):
+    """El interruptor no puede romper la pagina aunque no haya nada que ver."""
+    assert cliente.get("/mercado?mios=1").status_code == 200
+
+
 def test_un_jugador_inexistente_da_404(cliente):
     assert cliente.get("/jugador/999999").status_code == 404
 
@@ -82,6 +87,50 @@ def test_las_marcas_del_eje_son_numeros_redondos():
     marcas = charts._nice_ticks(1_000_000, 5_000_000)
     assert marcas == sorted(marcas)
     assert all(m % 1_000_000 == 0 for m in marcas), "nada de 1.234.567 en un eje"
+
+
+# --- las fotos --------------------------------------------------------------
+
+
+def test_un_equipo_con_dos_alias_no_duplica_al_jugador(db):
+    """El motivo de que las fotos vayan en un mapa aparte y no en un JOIN.
+
+    Los alias no son unicos por entidad: hay un equipo con dos alias de Mister
+    -uno de ellos el '0', que en sus respuestas significa "ninguno"- y algun
+    jugador tambien. Unirlos en `PLAYER_JOINS` repetiria esas filas en TODAS las
+    listas de la web, y un jugador duplicado en el mercado es mucho peor que uno
+    sin foto.
+    """
+    from fantasyhelper import queries
+    from fantasyhelper.storage import repository as repo
+
+    equipo = repo.upsert_team(db, name="Equipo", provider="mister", external_id="15")
+    db.execute(
+        "INSERT INTO team_alias (team_id, provider, external_id) VALUES (?, 'mister', '0')",
+        (equipo,),
+    )
+    repo.resolve_player(db, provider="mister", external_id="99", name="Uno",
+                        team_id=equipo)
+
+    jugadores, equipos = queries.mister_ids(db)
+    assert len(equipos) == 1
+    # El id mas bajo POR ENCIMA DE CERO, y comparado como numero: en texto el
+    # '9' iria despues del '15'.
+    assert equipos[equipo] == "15"
+    assert jugadores and all(v != "0" for v in jugadores.values())
+
+
+def test_el_mapa_de_fotos_ordena_como_numeros(db):
+    from fantasyhelper import queries
+    from fantasyhelper.storage import repository as repo
+
+    equipo = repo.upsert_team(db, name="Equipo", provider="mister", external_id="15")
+    db.execute(
+        "INSERT INTO team_alias (team_id, provider, external_id) VALUES (?, 'mister', '9')",
+        (equipo,),
+    )
+    _, equipos = queries.mister_ids(db)
+    assert equipos[equipo] == "9", "9 < 15 como numero, aunque no como texto"
 
 
 # --- el boton de actualizar -------------------------------------------------

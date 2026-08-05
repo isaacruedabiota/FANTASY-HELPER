@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from fantasyhelper import market, xpts
+from fantasyhelper import market, queries, xpts
 
 log = logging.getLogger(__name__)
 
@@ -104,4 +104,15 @@ def predictions(conn: sqlite3.Connection) -> tuple[dict, dict]:
     return (
         CACHE.get("xpts", huella, lambda: xpts.expected_points(conn)),
         CACHE.get("forecast", huella, lambda: market.forecast(conn, model=modelo)),
+    )
+
+
+def photo_ids(conn: sqlite3.Connection) -> tuple[dict[int, str], dict[int, str]]:
+    """Los ids de Mister con los que se arman las URLs de foto y escudo.
+
+    Son dos consultas baratas, pero se cachean igual porque las pide cada
+    pantalla y solo cambian cuando entra un jugador nuevo al catalogo.
+    """
+    return CACHE.get(
+        "fotos", data_fingerprint(conn), lambda: queries.mister_ids(conn)
     )

@@ -84,6 +84,34 @@ CREATE TABLE IF NOT EXISTS fixture (
 );
 CREATE INDEX IF NOT EXISTS idx_fixture_matchday ON fixture(season, matchday);
 
+-- Rejilla de "quien juega contra quien" jornada a jornada.
+--
+-- No sustituye a `fixture`, la complementa. `fixture` solo se llena con el
+-- PROXIMO partido de cada equipo, que es lo unico que trae la ficha con sede y
+-- hora; asi que del calendario a tres semanas vista no se sabia nada. Pero la
+-- misma ficha lleva, en la lista de jornadas, el escudo del rival de cada una:
+-- quince jornadas por delante, para los veinte equipos.
+--
+-- Lo que ahi NO viene es la sede, de ahi que `is_home` admita nulo. Distinguir
+-- "juega fuera" de "no se sabe donde" importa: dar por visitante lo que no se
+-- sabe penalizaria a media liga por falta de dato.
+--
+-- Ojo con leer esto como "el dia que juega": la jornada puede estar aplazada.
+-- Los seis equipos con internacionales en semifinales del Mundial tienen rival
+-- asignado en la J1 y aun asi no juegan esa semana.
+CREATE TABLE IF NOT EXISTS team_schedule (
+    id            INTEGER PRIMARY KEY,
+    season        TEXT NOT NULL,
+    matchday      INTEGER NOT NULL,
+    team_id       INTEGER NOT NULL REFERENCES team(id) ON DELETE CASCADE,
+    opponent_id   INTEGER NOT NULL REFERENCES team(id),
+    is_home       INTEGER,             -- NULL = se sabe el rival, no la sede
+    updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE (season, matchday, team_id)
+);
+CREATE INDEX IF NOT EXISTS idx_team_schedule
+    ON team_schedule(season, team_id, matchday);
+
 
 -- ---------------------------------------------------------------------------
 -- Capa de cuenta / liga / manager (especifica del fantasy)
@@ -125,6 +153,14 @@ CREATE TABLE IF NOT EXISTS manager (
     external_id  TEXT NOT NULL,
     name         TEXT NOT NULL,
     is_me        INTEGER NOT NULL DEFAULT 0,
+    -- Foto de perfil. Se guarda la URL entera y no un id porque el nombre del
+    -- fichero es un hash que Mister genera al subirla ('66b73b73dad83.png'):
+    -- no hay forma de deducirlo del id del participante.
+    avatar_url   TEXT,
+    -- Respaldo para quien no ha subido foto: Mister le pinta un circulo de
+    -- color con su inicial, y sin esto esa gente se quedaria sin nada.
+    avatar_color TEXT,
+    avatar_initials TEXT,
     UNIQUE (league_id, external_id)
 );
 
@@ -183,6 +219,13 @@ CREATE TABLE IF NOT EXISTS manager_snapshot (
     captured_at    TEXT NOT NULL,
     manager_id     INTEGER NOT NULL REFERENCES manager(id) ON DELETE CASCADE,
     balance        INTEGER,             -- saldo disponible
+    -- Saldo contando lo que ya esta comprometido: pujas lanzadas y ventas
+    -- pendientes de cerrar. Es el que dice de verdad cuanto puedes gastar, y
+    -- puede ser bastante menor que el disponible con varias pujas en el aire.
+    future_balance INTEGER,
+    -- Hasta donde deja endeudarse la liga. Es un limite de la comunidad, no del
+    -- participante, pero llega por el mismo sitio y cambia si el admin lo toca.
+    max_debt       INTEGER,
     team_value     INTEGER,
     points         INTEGER,
     position       INTEGER,             -- puesto en la clasificacion

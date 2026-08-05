@@ -82,11 +82,28 @@ def weekly_euros(
                 (fila["euros_por_puntos"] or 0) + (revalorizacion or 0)
             )
 
+        # Lo mismo pero a tres jornadas vista, que es el plazo de un fichaje.
+        # Se recalcula entero en vez de escalar el anterior porque la mitad de
+        # revalorizacion no depende del calendario y no hay que tocarla.
+        calendario = fila.get("xpts_calendario")
+        fila["rendimiento_calendario"] = (
+            None
+            if fila["rendimiento_semanal"] is None
+            else (round(calendario * euros_por_punto) if calendario else 0)
+            + (revalorizacion or 0)
+        )
+
     return filas
 
 
 def _rendimiento(fila: dict) -> float:
     return fila["rendimiento_semanal"] if fila["rendimiento_semanal"] is not None else 0
+
+
+def _con_calendario(fila: dict) -> float:
+    """Rendimiento a varias jornadas, que es por lo que se ordena al fichar."""
+    valor = fila.get("rendimiento_calendario")
+    return valor if valor is not None else _rendimiento(fila)
 
 
 #: Un rival no paga una clausula por un suplente por barata que sea, asi que
@@ -152,18 +169,25 @@ def briefing(
     vendibles = [f for f in mios if f["rendimiento_semanal"] is not None]
     vendibles.sort(key=_rendimiento)
 
+    # Solo lo que esta HOY en el mercado. Antes salia aqui cualquier jugador sin
+    # dueno del catalogo entero, y la mayoria no se podian fichar: en Mister no
+    # se compra a quien te apetece, se compra de la lista del dia, que son unas
+    # decenas y cambia cada madrugada. Recomendar a los demas era ruido.
     disponibles = [
-        fila for fila in enriquecer(queries.all_players(conn))
-        if not fila["owner"]
+        fila for fila in enriquecer(queries.market(conn))
+        # Los propios no se compran, y los del mercado se ordenan por lo que
+        # cuestan de verdad -el precio pedido-, que en los de rival no es su
+        # valor de mercado.
+        if fila["seller_id"] != manager_id
         and fila["rendimiento_semanal"] is not None
-        and (budget is None or (fila["market_value"] or 0) <= budget)
+        and (budget is None or (fila["asking_price"] or fila["market_value"] or 0) <= budget)
     ]
-    disponibles.sort(key=_rendimiento, reverse=True)
+    disponibles.sort(key=_con_calendario, reverse=True)
 
     objetivos = enriquecer(
         queries.clause_targets(conn, manager_id=manager_id, budget=budget)
     )
-    objetivos.sort(key=_rendimiento, reverse=True)
+    objetivos.sort(key=_con_calendario, reverse=True)
 
     riesgo = _amenazados(enriquecer(queries.clause_risk(conn, manager_id)))
 

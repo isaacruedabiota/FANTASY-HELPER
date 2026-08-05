@@ -101,3 +101,51 @@ def test_puntos_no_arrastran_el_sufijo_pts(mister_standings_html):
     managers = parse_standings(mister_standings_html)
     for manager in managers:
         assert manager.points is None or manager.points < 100_000
+
+
+# --- avatares de los participantes ------------------------------------------
+
+#: Copiado tal cual de una respuesta de /standings. Mister pinta SIEMPRE el
+#: circulo de color con la inicial y encima, si la hay, la foto con un `onerror`
+#: que la esconde; por eso vienen las dos cosas y hay que quedarse con ambas.
+STANDINGS_CON_AVATAR = """
+<div class="player-row">
+  <a class="btn btn-sw-link user" href="users/10741820/gorje44">
+    <div class="position">1</div>
+    <div class="user-avatar user-avatar--sm" style="background-color: hsl(115 50 50); ">
+      <span>G</span>
+      <img src="https://cdn-mister.mundodeportivo.com/file/cdn-mister/users/64c8.png"
+           onerror="this.style.display='none'" loading="lazy">
+    </div>
+    <div class="info"><div class="name">Gorje44</div>
+      <div class="played">15 jugadores · € 22.572.000</div></div>
+    <div class="points">0<span>Pts</span></div>
+  </a>
+</div>
+<div class="player-row">
+  <a class="btn btn-sw-link user" href="users/10741821/sinfoto">
+    <div class="position">2</div>
+    <div class="user-avatar user-avatar--sm" style="background-color: hsl(80 50 50); ">
+      <span>S</span>
+    </div>
+    <div class="info"><div class="name">SinFoto</div></div>
+  </a>
+</div>
+"""
+
+
+def test_se_lee_la_foto_del_participante():
+    con_foto, _ = parse_standings(STANDINGS_CON_AVATAR)
+
+    assert con_foto.avatar_url.endswith("/users/64c8.png")
+    assert con_foto.avatar_color == "hsl(115 50 50)"
+    assert con_foto.avatar_initials == "G"
+
+
+def test_quien_no_tiene_foto_conserva_su_circulo_de_color():
+    """Sin esto, la mitad de la liga se quedaria sin nada que mostrar."""
+    _, sin_foto = parse_standings(STANDINGS_CON_AVATAR)
+
+    assert sin_foto.avatar_url is None
+    assert sin_foto.avatar_color == "hsl(80 50 50)"
+    assert sin_foto.avatar_initials == "S"

@@ -39,6 +39,13 @@ log = logging.getLogger(__name__)
 #: data-position en Mister -> codigo canonico.
 POSITION_MAP = {"1": "PT", "2": "DF", "3": "MC", "4": "DL"}
 
+#: El equipo numero 0 de Mister no es un equipo: es su forma de decir "ninguno".
+#: Lo llama literalmente 'void' y se lo pone a quien no tiene club, como Ter
+#: Stegen en pretemporada. Tomarlo por un equipo real fue un fallo con cola: se
+#: creo un 'mister-team-0' que la reconciliacion acabo fundiendo con el Real
+#: Madrid, y a partir de ahi todo jugador sin club era del Real Madrid.
+VOID_TEAM_ID = "0"
+
 PLAYER_HREF_RE = re.compile(r"players/(\d+)/([\w\-]+)")
 #: Mister pega emojis al nombre como distintivo ("A. Grimaldo💥").
 EMOJI_RE = re.compile(
@@ -85,6 +92,12 @@ class MisterManager:
     points: int | None = None
     team_value: int | None = None
     squad_size: int | None = None
+    #: Foto de perfil, si la ha subido. El fichero es un hash generado al
+    #: subirla, asi que no se puede deducir del id: hay que leerla.
+    avatar_url: str | None = None
+    #: Color e inicial del circulo que Mister pinta cuando no hay foto.
+    avatar_color: str | None = None
+    avatar_initials: str | None = None
 
 
 @dataclass
@@ -127,6 +140,12 @@ def parse_decimal(text: str | None) -> float | None:
         return float(cleaned)
     except ValueError:
         return None
+
+
+def real_team_id(external_id: object) -> str | None:
+    """El id de equipo, salvo cuando significa 'sin equipo'."""
+    valor = _str_or_none(external_id)
+    return None if valor == VOID_TEAM_ID else valor
 
 
 def _value_direction(node: Tag) -> str | None:
@@ -187,7 +206,7 @@ def parse_players(html: bytes | str) -> list[MisterPlayer]:
         team_external_id = None
         logo = row.select_one(".icons img.team-logo[src]")
         if logo and (logo_match := TEAM_LOGO_RE.search(logo["src"])):
-            team_external_id = logo_match.group(1)
+            team_external_id = real_team_id(logo_match.group(1))
 
         average = None
         if avg := row.select_one(".avg"):
@@ -317,7 +336,7 @@ def parse_json_player(entry: dict, *, default_owner: str | None = None) -> Miste
         slug=slugify(name),
         name=name,
         position=POSITION_MAP.get(str(entry.get("position"))),
-        team_external_id=_str_or_none(entry.get("id_team") or entry.get("team")),
+        team_external_id=real_team_id(entry.get("id_team") or entry.get("team")),
         market_value=_as_int(entry.get("value")),
         owner_id=(
             _str_or_none(entry.get("id_uc"))
@@ -458,7 +477,7 @@ def parse_season_history(payload: dict) -> list[SeasonStat]:
                 points=points,
                 avg_points=avg_points,
                 matches_played=matches,
-                team_external_id=_str_or_none(entry.get("id_team")),
+                team_external_id=real_team_id(entry.get("id_team")),
             )
         )
     return stats
@@ -477,18 +496,55 @@ def parse_team_names(payload: dict) -> dict[str, str]:
     names: dict[str, str] = {}
 
     team = (data.get("player") or {}).get("team") or {}
-    if (team_id := _str_or_none(team.get("id"))) and team.get("name"):
+    if (team_id := real_team_id(team.get("id"))) and team.get("name"):
         names[team_id] = str(team["name"])
 
     for match in (data.get("next_match") or {}).values():
         if not isinstance(match, dict):
             continue
         for lado in ("home", "away"):
-            side_id = _str_or_none(match.get(f"id_{lado}"))
+            side_id = real_team_id(match.get(f"id_{lado}"))
             if side_id and match.get(lado):
                 names[side_id] = str(match[lado])
 
     return names
+
+
+@dataclass
+class ScheduledMatch:
+    """Una jornada del calendario de un equipo: contra quien juega."""
+
+    matchday: int
+    opponent_external_id: str
+
+
+def parse_schedule(payload: dict) -> tuple[str | None, list[ScheduledMatch]]:
+    """Calendario del equipo del jugador: (id del equipo, rival por jornada).
+
+    Es el hallazgo que hace posible mirar mas de una jornada hacia delante. La
+    ficha lleva la lista de jornadas para pintar los puntos de cada una, y en
+    cada entrada mete el ESCUDO del rival, del que se saca su id. Son quince
+    jornadas por delante, y con veinte fichas -una por equipo- se tiene la
+    rejilla entera del calendario sin una sola peticion de mas.
+
+    Lo que no dice es la sede. Eso solo aparece en `next_match`, y por tanto se
+    va sabiendo jornada a jornada.
+
+    Cuidado con confundir esto con "cuando juega". Los seis equipos que
+    descansan la primera jornada por el Mundial tienen su rival de J1 asignado
+    igualmente: el partido existe, se juega mas tarde.
+    """
+    data = payload.get("data") or {}
+    equipo = _str_or_none(((data.get("player") or {}).get("team") or {}).get("id"))
+
+    partidos: list[ScheduledMatch] = []
+    for entry in data.get("points") or []:
+        numero = _as_int(entry.get("number"))
+        escudo = TEAM_LOGO_RE.search(str(entry.get("rivalLogoUrl") or ""))
+        if numero is not None and escudo:
+            partidos.append(ScheduledMatch(numero, escudo.group(1)))
+
+    return equipo, partidos
 
 
 def _matchday_numbers(payload: dict) -> dict[str, int]:
@@ -683,6 +739,8 @@ def parse_standings(html: bytes | str) -> list[MisterManager]:
             squad_size = int(info.group(1))
             team_value = parse_money(info.group(2))
 
+        url, color, initials = _avatar(row)
+
         managers.append(
             MisterManager(
                 external_id=match.group(1),
@@ -692,6 +750,35 @@ def parse_standings(html: bytes | str) -> list[MisterManager]:
                 points=points,
                 team_value=team_value,
                 squad_size=squad_size,
+                avatar_url=url,
+                avatar_color=color,
+                avatar_initials=initials,
             )
         )
     return managers
+
+
+#: 'background-color: hsl(115 50 50);' del circulo de avatar.
+AVATAR_COLOR_RE = re.compile(r"background-color:\s*([^;\"]+)")
+
+
+def _avatar(row: Tag) -> tuple[str | None, str | None, str | None]:
+    """(foto, color de fondo, inicial) del participante.
+
+    Mister pinta siempre el circulo de color con la inicial y encima, si la hay,
+    la foto con un `onerror` que la esconde. Se guardan las dos cosas: la foto
+    para mostrarla y el circulo para quien no tenga.
+    """
+    node = row.select_one(".user-avatar")
+    if node is None:
+        return None, None, None
+
+    imagen = node.select_one("img[src]")
+    inicial = node.select_one("span")
+    color = AVATAR_COLOR_RE.search(str(node.get("style") or ""))
+
+    return (
+        imagen["src"] if imagen else None,
+        color.group(1).strip() if color else None,
+        inicial.get_text(strip=True) if inicial else None,
+    )

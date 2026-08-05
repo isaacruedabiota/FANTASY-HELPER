@@ -100,3 +100,20 @@ def test_configuracion_del_usuario():
 def test_configuracion_ausente_no_revienta():
     assert parse_user_config("<html>sin datos</html>") is None
     assert parse_user_config("_FG_user = {esto no es json};") is None
+
+
+def test_el_saldo_futuro_puede_ser_negativo():
+    """Y no es un error: son las pujas ya lanzadas.
+
+    Es la diferencia entre lo que crees que tienes y lo que puedes comprometer.
+    Con 11,5M disponibles el saldo futuro real era de -2,4M, asi que el tope de
+    gasto no es el saldo sino el futuro mas lo que la liga deja deber.
+    """
+    html = PAGE_HTML.replace(
+        '"balance":{"current":37853000,"future":37853000,"maxDebt":43407000}',
+        '"balance":{"current":11503400,"future":-2372720,"maxDebt":6903280}',
+    )
+    user = parse_user_config(html)
+    assert user.balance == 11_503_400
+    assert user.future_balance == -2_372_720
+    assert user.max_debt == 6_903_280

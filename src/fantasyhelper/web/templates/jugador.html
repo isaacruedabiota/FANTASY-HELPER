@@ -1,7 +1,18 @@
 {% extends "base.html" %}
-{% import "_macros.html" as m %}
+{% import "_macros.html" as m with context %}
 
 {% block contenido %}
+<div class="ficha">
+  {{ m.foto(jugador) }}
+  <div>
+    <strong>{{ jugador.name }}</strong>
+    <span class="sub">
+      {{ jugador.position or '?' }} · {{ (jugador.team or '?')|upper }} ·
+      {% if jugador.owner %}de {{ jugador.owner }}{% else %}libre{% endif %}
+    </span>
+  </div>
+</div>
+
 <div class="tiles">
   <div class="tile hero">
     <span class="etiqueta">Valor</span>
@@ -17,12 +28,42 @@
   </div>
 </div>
 
+{% if jugador.proximas %}
+<section>
+  <h2>Próximas jornadas</h2>
+  <p class="sub">
+    Contra quién juega su equipo. La sede solo se conoce del partido más
+    próximo: el calendario de Mister da el rival, no dónde se juega.
+  </p>
+  <div class="tabla-scroll">
+    <table>
+      <thead><tr><th>Jornada</th><th>Rival</th><th>Dificultad</th></tr></thead>
+      <tbody>
+        {% for j in jugador.proximas %}
+          <tr>
+            <td>J{{ j.matchday }}</td>
+            <td>
+              {{ m.escudo(j.opponent_id) }} {{ (j.opponent or '?')|upper }}
+              {%- if j.is_home is not none %}<span class="sede">{{ 'L' if j.is_home else 'V' }}</span>{% endif %}
+            </td>
+            {# El nombre escrito y no solo el color, que aqui ademas iria en
+               una celda sin nada al lado que lo explique. #}
+            <td class="{{ 'sube' if j.factor > 1.02 else 'baja' if j.factor < 0.98 }}">
+              {{ 'fácil' if j.factor > 1.02 else 'difícil' if j.factor < 0.98 else 'normal' }}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
 <section>
   <h2>Valor de mercado</h2>
   <p class="sub">
-    {{ jugador.position or '?' }} · {{ jugador.team or '?' }} ·
-    {% if jugador.owner %}de {{ jugador.owner }}{% else %}libre{% endif %}
-    {%- if jugador.clause_value %} · cláusula {{ jugador.clause_value|money }} €{% endif %}
+    {%- if jugador.clause_value %}Cláusula {{ jugador.clause_value|money }} €
+    {%- else %}Sin cláusula: no lo tiene nadie{% endif -%}
   </p>
   <div class="chart-card">
     {% if grafico.empty %}
@@ -77,10 +118,20 @@
   <summary>Ver los {{ historico|length }} valores en tabla</summary>
   <div class="tabla-scroll">
     <table>
-      <thead><tr><th>Fecha</th><th>Valor</th></tr></thead>
+      <thead><tr><th>Fecha</th><th>Valor</th><th>Subida</th></tr></thead>
       <tbody>
         {% for h in historico|reverse %}
-          <tr><td>{{ h.snapshot_date }}</td><td>{{ h.market_value|money }} €</td></tr>
+          <tr>
+            <td>{{ h.snapshot_date }}</td>
+            <td>{{ h.market_value|money }} €</td>
+            {# El "dia anterior" es el anterior de la serie. Si falto una
+               captura, la diferencia abarca varios dias y se dice, en vez de
+               hacerla pasar por variacion diaria. #}
+            <td>
+              {{ m.euros(h.delta, cero=true, corto=false) }}
+              {%- if h.dias and h.dias > 1 %}<span class="meta"> en {{ h.dias|int }} d</span>{% endif -%}
+            </td>
+          </tr>
         {% endfor %}
       </tbody>
     </table>

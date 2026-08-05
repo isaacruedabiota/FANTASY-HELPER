@@ -20,6 +20,19 @@ Cada factor sale de un sitio distinto y con una fiabilidad distinta:
                 modelo y esta acotado a +-25% a proposito.
   ajuste_sede   local o visitante. Un prior fijo hasta que haya datos propios.
 
+EL CALENDARIO, APARTE
+
+xPts mira una sola jornada, y para decidir un fichaje eso se queda corto: un
+jugador se tiene tres o cuatro semanas, no un domingo. De ahi `xpts_calendario`,
+que aplica la dificultad media de las proximas jornadas en vez de la de la
+siguiente.
+
+Va como cifra APARTE y no multiplicando a xPts, a proposito. xPts tiene que
+seguir siendo lo que se espera de la jornada que viene, porque es lo unico que
+se puede contrastar despues con los puntos que de verdad haga el jugador.
+Mezclarle el calendario lo convertiria en una media de tres semanas que ya no
+se puede comprobar contra nada.
+
 Sobre lo que este modulo NO hace: no predice el valor de mercado ni el
 resultado del partido, y no distingue por que un jugador rindio poco. Es una
 media condicionada, no una prediccion de la jornada.
@@ -71,6 +84,13 @@ OPPONENT_CLAMP = (0.75, 1.25)
 #: publica en la ficha, hoy vacios porque no se ha jugado nada.
 HOME_ADVANTAGE = 1.05
 AWAY_PENALTY = 0.95
+
+#: Jornadas que se miran hacia delante para juzgar el calendario. Tres semanas
+#: es el horizonte con el que se decide un fichaje: por menos no compensa el
+#: coste de la operacion, y mas alla el once del rival ya no se parece al de
+#: hoy. La ficha de Mister trae quince, asi que el limite es de criterio y no
+#: de dato.
+LOOKAHEAD_MATCHDAYS = 3
 
 #: Jugadores con historico que hacen falta para fiarse de la fuerza de un
 #: equipo. Por debajo se usa la mediana de la liga: un recien ascendido del que
@@ -264,6 +284,76 @@ def next_fixtures(conn: sqlite3.Connection) -> dict[int, sqlite3.Row]:
     return {fila["team_id"]: fila for fila in filas}
 
 
+def upcoming(
+    conn: sqlite3.Connection, *, matchdays: int = LOOKAHEAD_MATCHDAYS
+) -> dict[int, list[sqlite3.Row]]:
+    """Las proximas jornadas de cada equipo: {team_id: [filas, la primera antes]}.
+
+    Distinto de `next_fixtures`, que solo da la siguiente. Un fichaje se
+    mantiene tres o cuatro semanas, asi que el calendario de las siguientes
+    jornadas pesa tanto como el del domingo, y hasta ahora no se miraba.
+
+    El punto de partida es la jornada de su PROXIMO partido y no la jornada en
+    curso de la liga, porque no son la misma para todos: los seis equipos que
+    descansan la primera por el Mundial tienen rival asignado en ella y aun asi
+    empiezan en la segunda. Contarles la J1 les pondria un partido que no van a
+    jugar.
+    """
+    desde = {
+        fila["team_id"]: fila["matchday"] for fila in next_fixtures(conn).values()
+    }
+    # Sin ningun proximo partido conocido -pretemporada cerrada, o el dia que
+    # falle la captura- se arranca de la primera jornada que haya en la rejilla.
+    primera = conn.execute(
+        "SELECT MIN(matchday) AS j FROM team_schedule WHERE season = ?",
+        (settings.season,),
+    ).fetchone()
+    por_defecto = (primera["j"] if primera else None) or 1
+
+    calendario: dict[int, list[sqlite3.Row]] = {}
+    for fila in conn.execute(
+        """
+        SELECT s.team_id, s.matchday, s.opponent_id, s.is_home, t.name AS opponent
+        FROM team_schedule s
+        LEFT JOIN team t ON t.id = s.opponent_id
+        WHERE s.season = ?
+        ORDER BY s.team_id, s.matchday
+        """,
+        (settings.season,),
+    ):
+        inicio = desde.get(fila["team_id"], por_defecto)
+        if inicio <= fila["matchday"] < inicio + matchdays:
+            calendario.setdefault(fila["team_id"], []).append(fila)
+
+    return calendario
+
+
+def schedule_factor(
+    strength: dict[int, float], fixtures: list[sqlite3.Row] | None
+) -> float:
+    """Lo bueno o malo que es un tramo de calendario, como factor sobre la media.
+
+    Es la media de los ajustes de rival de cada jornada, con la sede aplicada
+    solo donde se sabe. Media y no producto: multiplicar tres factores de 0,8
+    daria 0,51, y enfrentarse a tres equipos duros no reduce a la mitad lo que
+    rinde un jugador POR PARTIDO, que es lo que mide esto.
+
+    Sin calendario devuelve 1.0, que es lo honesto: no saber contra quien juega
+    no es motivo para penalizarlo ni para premiarlo.
+    """
+    if not fixtures:
+        return 1.0
+
+    factores = []
+    for partido in fixtures:
+        factor = opponent_factor(strength, partido["opponent_id"])
+        if partido["is_home"] is not None:
+            factor *= HOME_ADVANTAGE if partido["is_home"] else AWAY_PENALTY
+        factores.append(factor)
+
+    return sum(factores) / len(factores)
+
+
 #: Historico por jugador junto con lo que lleva hecho esta temporada.
 #: Se saca de una vez para todos y se mezcla en Python: el calculo tiene
 #: suficientes ramas como para que en SQL fuese ilegible.
@@ -370,6 +460,7 @@ def expected_points(
     medias = base_averages(conn)
     fuerza = team_strength(conn)
     calendario = next_fixtures(conn)
+    proximas = upcoming(conn)
 
     equipos = {
         fila["id"]: fila["team_id"]
@@ -378,7 +469,8 @@ def expected_points(
 
     resultado: dict[int, dict] = {}
     for player_id, media in medias.items():
-        partido = calendario.get(equipos.get(player_id))
+        equipo = equipos.get(player_id)
+        partido = calendario.get(equipo)
         ajustes = Adjustments()
         if partido is not None:
             ajustes.opponent = opponent_factor(fuerza, partido["opponent_id"])
@@ -386,6 +478,12 @@ def expected_points(
 
         esperado = media * ajustes.combined
         probabilidad = (probabilities or {}).get(player_id)
+
+        # El calendario se da APARTE y no multiplicando a xPts. xPts es lo que
+        # se espera de la proxima jornada y tiene que seguir siendolo: mezclarle
+        # las tres siguientes lo convertiria en una media de tres semanas que ya
+        # no se puede contrastar con los puntos que haga el domingo.
+        siguientes = proximas.get(equipo) or []
         resultado[player_id] = {
             "media_base": media,
             "ajuste_rival": ajustes.opponent,
@@ -395,6 +493,17 @@ def expected_points(
             "is_home": bool(partido["is_home"]) if partido is not None else None,
             "xpts_si_juega": esperado,
             "xpts": esperado * probabilidad if probabilidad is not None else None,
+            "ajuste_calendario": schedule_factor(fuerza, siguientes),
+            "proximas": [
+                {
+                    "matchday": f["matchday"],
+                    "opponent": f["opponent"],
+                    "opponent_id": f["opponent_id"],
+                    "is_home": None if f["is_home"] is None else bool(f["is_home"]),
+                    "factor": opponent_factor(fuerza, f["opponent_id"]),
+                }
+                for f in siguientes
+            ],
         }
     return resultado
 
@@ -445,7 +554,16 @@ def attach(
             xpts = prediccion["xpts_si_juega"] * probabilidad
             datos.update(
                 {clave: prediccion[clave]
-                 for clave in ("media_base", "ajuste_rival", "ajuste_sede")}
+                 for clave in ("media_base", "ajuste_rival", "ajuste_sede",
+                               "ajuste_calendario", "proximas")}
+            )
+            # Lo que rendiria por jornada durante las proximas semanas, en vez
+            # de solo la que viene. Es lo que importa al fichar: un jugador se
+            # tiene varias jornadas, no una.
+            datos["xpts_calendario"] = (
+                prediccion["media_base"]
+                * prediccion["ajuste_calendario"]
+                * probabilidad
             )
             # El rival del modelo sale del calendario propio y es mas fiable que
             # el que traiga la fila, pero solo se pisa si de verdad lo sabemos.
