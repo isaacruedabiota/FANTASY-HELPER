@@ -374,6 +374,86 @@ def xpts(
 
 
 @app.command()
+def hoy(
+    limite: int = typer.Option(6, help="Cuantas filas por bloque."),
+    saldo: int = typer.Option(None, help="Presupuesto a considerar, en euros."),
+) -> None:
+    """Qué hacer hoy: comprar, vender, clausular y blindar, todo en euros.
+
+    Suma lo que rinde un jugador en puntos -convertidos a euros al precio que
+    paga la liga- y lo que se espera que se revalorice. Así un suplente barato
+    que sube de valor se puede comparar con un titular caro estancado.
+    """
+    from fantasyhelper import advice
+
+    conn, me = _con_liga()
+    try:
+        if saldo is None:
+            saldo = queries.my_balance(conn)
+
+        datos = advice.briefing(conn, manager_id=me["id"], budget=saldo, limit=limite)
+        if not datos["euros_por_punto"]:
+            console.print(
+                "[yellow]No hay bonificación por punto configurada,[/yellow] así que "
+                "los puntos no se pueden convertir a euros. Ejecuta "
+                "[bold]fh bonificaciones --aplicar[/bold]."
+            )
+            return
+
+        console.print(
+            f"[bold]{me['name']}[/bold] · saldo {display.money(saldo)} € · "
+            f"la liga paga {display.money(datos['euros_por_punto'])} € por punto\n"
+        )
+
+        bloques = (
+            ("Comprar: lo que más genera de entre los libres que puedes pagar",
+             datos["comprar"], "Precio", "market_value"),
+            ("\nClausular: lo mismo, pero pagando la cláusula",
+             datos["clausulas"], "Clausula", "clause_value"),
+            ("\nVender: los tuyos que menos generan",
+             datos["vender"], "Valor", "market_value"),
+        )
+        for titulo, filas, etiqueta, campo in bloques:
+            if not filas:
+                continue
+            table = display.player_table(
+                titulo, extra=(etiqueta, "xPts", "€ pts", "€ valor", "€/semana")
+            )
+            for fila in filas:
+                table.add_row(*display.player_row(
+                    fila,
+                    display.money(fila.get(campo), short=True),
+                    display.points(fila.get("xpts")),
+                    display.delta(fila.get("euros_por_puntos")),
+                    display.delta(fila.get("euros_ventaja")),
+                    display.delta(fila.get("rendimiento_semanal"), show_zero=True),
+                ))
+            console.print(table)
+
+        if datos["blindar"]:
+            table = display.player_table(
+                "\nBlindar: en cuántas semanas recuperaría un rival lo que pagase",
+                extra=("Clausula", "€/semana", "Semanas"),
+            )
+            for fila in datos["blindar"]:
+                table.add_row(*display.player_row(
+                    fila,
+                    display.money(fila["clause_value"], short=True),
+                    display.delta(fila["rendimiento_semanal"], show_zero=True),
+                    f"{fila['semanas_amortizacion']:.0f}",
+                ))
+            console.print(table)
+
+        console.print(
+            "\n[dim]'€/semana' suma lo que paga la liga por sus puntos y lo que se "
+            "espera que suba de valor. Ojo: en esta liga la bonificación por puesto "
+            "va al revés, así que sumar puntos te reduce ese otro ingreso.[/dim]"
+        )
+    finally:
+        conn.close()
+
+
+@app.command()
 def valor(
     limite: int = typer.Option(12, help="Cuantas filas por tabla."),
     minimo: int = typer.Option(None, help="Valor minimo del jugador, en euros."),

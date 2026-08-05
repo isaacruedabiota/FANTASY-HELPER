@@ -40,9 +40,16 @@ def money(value: float | None, *, short: bool = False) -> str:
     return f"{value:,}".replace(",", ".")
 
 
-def delta(value: int | None) -> str:
-    if not value:
+def delta(value: int | None, *, show_zero: bool = False) -> str:
+    """Variacion en euros. El cero se deja en blanco salvo que se pida verlo.
+
+    En una columna de variaciones el blanco se lee bien, pero en una de totales
+    se confunde con "no hay dato", que es otra cosa. De ahi el interruptor.
+    """
+    if value is None or (not value and not show_zero):
         return ""
+    if not value:
+        return "[dim]0[/dim]"
     color = "green" if value > 0 else "red"
     sign = "+" if value > 0 else ""
     return f"[{color}]{sign}{money(value, short=True)}[/{color}]"

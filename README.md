@@ -24,7 +24,8 @@ primer día, sin esperar a acumular histórico propio.
 | 0c | Backfill del histórico de valores | **funcionando** |
 | 1 | Consultas por CLI: plantilla, mercado, cláusulas, chollos, ficha | **funcionando** |
 | 2a | Puntos esperados (xPts) y euros por punto | **funcionando** |
-| 2b | Once óptimo y web | pendiente |
+| 2b | Recomendación diaria: puntos y valor en la misma moneda | **funcionando** |
+| 2c | Once óptimo y web | pendiente |
 | 3 | Modelo de valor de mercado entrenado con el histórico | **funcionando** |
 | 4 | Segundo adapter (Biwenger / LaLiga Fantasy) | pendiente |
 
@@ -78,6 +79,7 @@ fh estado
 ### Consultas
 
 ```bash
+fh hoy                   # qué comprar, vender, clausular y blindar
 fh plantilla             # tu plantilla: valor, cláusula, probabilidad, rival
 fh plantilla --de Skar   # la de un rival
 fh mercado               # el mercado de hoy, por probabilidad de ser titular
@@ -171,6 +173,29 @@ ningún otro medio.
 Lo más probable es que esto funcione porque Mister reparte cada movimiento entre varios
 días en vez de aplicarlo de golpe. Si es así no adivina nada: lee un ajuste que ya está en
 marcha y no ha terminado. Sirve para decidir igual, pero no es lo mismo.
+
+## Juntarlo todo: euros por semana
+
+`fh xpts` da puntos y `fh valor` da euros, y no había forma de comparar «2,8 puntos» con
+«+640.000 €». El cambio lo pone la propia liga: **paga 75.000 € por punto**. Con eso un
+punto *es* una cantidad de dinero y las dos cosas se suman:
+
+```
+rendimiento semanal = xPts × euros_por_punto + revalorización esperada
+```
+
+Y entonces se ve algo que por separado no se veía: un suplente barato que se está
+revalorizando puede generar más dinero a la semana que un titular caro estancado.
+
+`fh hoy` usa esa moneda común para las cuatro decisiones: qué comprar de entre los libres
+que caben en tu saldo, a quién sale a cuenta clausular, cuáles de los tuyos rinden menos y
+cuáles corren peligro. El aviso de blindaje se ordena por **en cuántas semanas recuperaría
+un rival lo que pagase**, que es la cuenta que haría él.
+
+Dos avisos. Solo entra el pago por punto, que es lo único atribuible a un jugador concreto:
+el once ideal y la quiniela no dependen de nadie en particular. Y la escala por puesto de
+esta liga va al revés, así que **sumar puntos te reduce ese otro ingreso** — pasar de
+último a primero cuesta 1,2M de bonificación, que a 75.000 € el punto son dieciséis puntos.
 
 ## Conectar Mister
 
