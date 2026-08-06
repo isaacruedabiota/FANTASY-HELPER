@@ -377,3 +377,41 @@ def test_un_nombre_de_equipo_bueno_no_se_degrada_a_su_slug(db):
     assert db.execute("SELECT name FROM team WHERE id=?", (equipo,)).fetchone()[0] == (
         "Rayo Vallecano"
     )
+
+
+# --- la deuda maxima --------------------------------------------------------
+
+
+def test_lo_que_se_puede_gastar_reproduce_el_maxdebt_de_mister(db):
+    """La formula esta deducida, asi que se ancla a las cifras reales.
+
+    Son dos capturas propias en las que la plantilla del momento coincide con la
+    del snapshot del dia. Cuadran al euro, y por eso se puede aplicar a los
+    rivales, de los que Mister no publica esta cifra.
+    """
+    assert queries.spendable(11_503_400, -2_372_720, 37_104_000) == 6_903_280
+    assert queries.spendable(21_873_420, 327_060, 27_563_000) == 7_217_810
+
+
+def test_sin_pujas_lanzadas_se_usa_el_saldo_disponible(db):
+    """De los rivales no se conoce el futuro; su saldo es lo mejor que hay."""
+    assert queries.spendable(10_000_000, None, 40_000_000) == 20_000_000
+    assert queries.spendable(None, None, 40_000_000) is None
+
+
+def test_la_deuda_maxima_de_un_rival_sale_de_su_plantilla(db):
+    """Es el numero que dice quien puede pagarte una clausula."""
+    liga = repo.upsert_league(db, provider="mister", external_id="1", name="L")
+    rival = repo.upsert_manager(db, league_id=liga, external_id="20", name="Rival")
+
+    pid = repo.resolve_player(db, provider="mister", external_id="a", name="Uno")
+    repo.record_player_value(db, provider="mister", source="mister",
+                             player_id=pid, market_value=8_000_000)
+    repo.record_ownership(db, league_id=liga, player_id=pid, manager_id=rival,
+                          clause_level=0, clause_floor=8_000_000)
+
+    fila = next(f for f in queries.estimated_balances(db) if f["id"] == rival)
+    # 50M - 8M de plantilla = 42M de saldo, mas un cuarto de los 8M.
+    assert fila["saldo_estimado"] == 42_000_000
+    assert fila["deuda_estimada"] == 44_000_000
+    assert fila["deuda_real"] is None, "de un rival no se publica"

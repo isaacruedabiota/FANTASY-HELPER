@@ -12,7 +12,10 @@
   <div class="tabla-scroll">
     <table>
       <thead>
-        <tr><th>Participante</th><th>Pts</th><th>Jug.</th><th>Plantilla</th><th>Saldo est.</th><th>Real</th></tr>
+        <tr>
+          <th>Participante</th><th>Pts</th><th>Jug.</th><th>Plantilla</th>
+          <th>Saldo est.</th><th>Puede gastar</th><th>Real</th>
+        </tr>
       </thead>
       <tbody>
         {% set saldo_por_id = {} %}
@@ -25,12 +28,33 @@
             <td>{{ fila.squad_size }}</td>
             <td>{{ s.valor_plantilla|money if s else '–' }}</td>
             <td>{{ s.saldo_estimado|money if s else '–' }}</td>
+            {# De ti se sabe la de verdad; de los demas hay que estimarla. Se
+               marca cual es cual en vez de mezclarlas sin avisar. #}
+            <td>
+              {%- if s and s.deuda_real -%}
+                <strong>{{ s.deuda_real|money }}</strong>
+              {%- elif s -%}
+                {{ s.deuda_estimada|money }}
+              {%- else -%}–{%- endif -%}
+            </td>
             <td>{{ s.saldo_real|money if s and s.saldo_real else '–' }}</td>
           </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+  <p class="nota">
+    <strong>Puede gastar</strong> es hasta dónde llega hoy: su saldo más el
+    <strong>25% del valor de su plantilla</strong>, que es lo que Mister deja
+    deber. Es el número que dice quién puede pagarte una cláusula, y suele ser
+    bastante mayor que su saldo.
+    <br><br>
+    La fórmula está deducida de la cifra que Mister publica de ti
+    (<code>maxDebt</code> = saldo futuro + 25% de la plantilla) y cuadra al euro.
+    En negrita cuando es la real —solo la tuya—; el resto son estimaciones y se
+    quedan <em>altas</em> si esa persona tiene pujas lanzadas, porque ese dinero
+    ya está comprometido y no se ve desde fuera.
+  </p>
 </section>
 
 <section>

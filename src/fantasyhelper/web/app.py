@@ -105,25 +105,27 @@ def inicio(request: Request):
         saldo = cartera["balance"] if cartera else None
         puntos, valores = predictions(conn)
 
-        # El tope de gasto no es el saldo disponible sino el comprometido, que
-        # es menor si hay pujas en el aire, mas lo que la liga deja deber. Con
-        # el disponible a secas se recomendaban fichajes que no se pueden pagar.
+        plantilla = advice.weekly_euros(
+            conn, queries.squad(conn, me["id"]), points=puntos, values=valores
+        )
+        valor_plantilla = sum(f["market_value"] or 0 for f in plantilla)
+
+        # El tope de gasto no es el saldo disponible: es el futuro -menos, si
+        # hay pujas en el aire- mas el cuarto de plantilla que la liga deja
+        # deber. Es exactamente el `maxDebt` que publica Mister, asi que se usa
+        # ese cuando esta y se calcula solo cuando no.
+        #
+        # Sumarle ademas el saldo futuro seria contarlo dos veces: `maxDebt` ya
+        # lo lleva dentro.
         tope = None
         if cartera is not None:
-            tope = (
-                cartera["future_balance"]
-                if cartera["future_balance"] is not None
-                else saldo
+            tope = cartera["max_debt"] or queries.spendable(
+                saldo, cartera["future_balance"], valor_plantilla
             )
-            if tope is not None and cartera["max_debt"]:
-                tope += cartera["max_debt"]
 
         datos = advice.briefing(
             conn, manager_id=me["id"], budget=tope, limit=6,
             model=momentum_model(conn), points=puntos, values=valores,
-        )
-        plantilla = advice.weekly_euros(
-            conn, queries.squad(conn, me["id"]), points=puntos, values=valores
         )
         return _pagina_con_estado(
             request, "hoy.html", conn,
@@ -132,7 +134,7 @@ def inicio(request: Request):
             cartera=cartera,
             saldo=saldo,
             tope=tope,
-            valor_plantilla=sum(f["market_value"] or 0 for f in plantilla),
+            valor_plantilla=valor_plantilla,
             jugadores=len(plantilla),
             datos=datos,
         )

@@ -484,6 +484,24 @@ INITIAL_BUDGET = 50_000_000
 #: usar el suelo de ese dia.
 CLAUSE_STEP_COST_RATIO = 0.2
 
+#: Hasta donde deja Mister endeudarse: el saldo futuro no puede bajar de menos
+#: un cuarto del valor de tu plantilla. Tiene su logica -si te pasas, vendes-
+#: y de ahi sale poder pujar por encima de lo que tienes en caja.
+#:
+#: Deducido de la cifra `maxDebt` que Mister publica del usuario de la sesion:
+#:
+#:     maxDebt = saldo_futuro + 0,25 x valor_plantilla
+#:
+#: Cuadra al euro en las dos capturas cuya plantilla coincide con la del
+#: snapshot del dia. En una tercera no cuadraba porque esa tarde se paso de
+#: quince jugadores a nueve; despejando de ahi el valor de la plantilla salen
+#: 39.756.000, que sumados a su saldo dan 50.000.000 EXACTOS, el presupuesto de
+#: salida de la liga. Dos formulas independientes coincidiendo al euro.
+#:
+#: Consecuencia que importa: `maxDebt` NO se suma al saldo futuro, ya ES lo que
+#: queda por comprometer.
+MAX_DEBT_RATIO = 0.25
+
 
 def baseline_at(conn: sqlite3.Connection) -> str | None:
     """Instante en que se congelo el punto de partida de la liga, si se hizo."""
@@ -616,7 +634,7 @@ def estimated_balances(conn: sqlite3.Connection) -> list[dict]:
             GROUP BY o.manager_id
         ),
         saldo_real AS (
-            SELECT manager_id, balance,
+            SELECT manager_id, balance, future_balance, max_debt,
                    ROW_NUMBER() OVER (
                        PARTITION BY manager_id ORDER BY snapshot_date DESC
                    ) AS rn
@@ -626,17 +644,44 @@ def estimated_balances(conn: sqlite3.Connection) -> list[dict]:
                p.valor AS valor_plantilla,
                COALESCE(ch.gasto, 0) AS gasto_clausulas,
                ? - p.valor - COALESCE(ch.gasto, 0) AS saldo_estimado,
-               sr.balance AS saldo_real
+               sr.balance AS saldo_real,
+               sr.future_balance AS futuro_real,
+               sr.max_debt AS deuda_real,
+               -- Lo que podria comprometer ahora mismo: su saldo mas el cuarto
+               -- de plantilla que la liga le deja deber. Con `saldo_estimado`
+               -- porque el suyo de verdad no se publica.
+               (? - p.valor - COALESCE(ch.gasto, 0)) + p.valor * ?
+                   AS deuda_estimada
         FROM plantilla_hoy p
         JOIN manager m ON m.id = p.manager_id
         LEFT JOIN clausulas_hoy ch ON ch.manager_id = m.id
         LEFT JOIN saldo_real sr ON sr.manager_id = m.id AND sr.rn = 1
         ORDER BY saldo_estimado DESC
         """,
-        (CLAUSE_STEP_COST_RATIO, INITIAL_BUDGET),
+        (CLAUSE_STEP_COST_RATIO, INITIAL_BUDGET, INITIAL_BUDGET, MAX_DEBT_RATIO),
     ).fetchall()
 
     return [dict(fila) for fila in filas]
+
+
+def spendable(
+    balance: int | None, future_balance: int | None, squad_value: int | None
+) -> int | None:
+    """Cuanto se puede comprometer ahora mismo, contando la deuda permitida.
+
+    Es el saldo futuro -el disponible menos lo que ya esta en pujas- mas el
+    cuarto de plantilla que Mister deja deber. Coincide al euro con el `maxDebt`
+    que el propio juego publica, y por eso ese numero NO hay que sumarlo otra
+    vez: ya lleva el saldo futuro dentro.
+
+    Se usa el futuro y no el disponible porque son cosas distintas y la
+    diferencia es enorme: con 21,8M en caja el futuro eran 327.060 € porque
+    habia 21,5M en pujas lanzadas.
+    """
+    caja = future_balance if future_balance is not None else balance
+    if caja is None:
+        return None
+    return round(caja + (squad_value or 0) * MAX_DEBT_RATIO)
 
 
 def feed_events(
