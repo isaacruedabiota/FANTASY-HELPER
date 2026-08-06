@@ -190,3 +190,26 @@ def test_una_captura_recien_arrancada_si_bloquea(db):
 
     repo.start_job(db, "daily_snapshot")
     assert other_capture_running(db)
+
+
+def test_un_reproceso_invalida_la_cache_aunque_no_toque_los_valores(db):
+    """`fh mister reprocesar` trabaja sobre el crudo y no escribe ni un valor.
+
+    Si la huella solo mirase la serie de valores, la web seguiria sirviendo el
+    modelo viejo. Se vio en pantalla: el rival escrito 'MALAGA' -el nombre de
+    antes, dentro del modelo cacheado- al lado de 'MÁLAGA' recien leido.
+    """
+    from fantasyhelper.storage import repository as repo
+    from fantasyhelper.web.cache import data_fingerprint
+
+    equipo = repo.upsert_team(db, name="malaga", provider="mister", external_id="13")
+    antes = data_fingerprint(db)
+
+    repo.rename_team(db, team_id=equipo, name="Málaga")
+    assert data_fingerprint(db) != antes, "renombrar un equipo cambia lo que se ve"
+
+    entre = data_fingerprint(db)
+    rival = repo.upsert_team(db, name="Sevilla", provider="mister", external_id="17")
+    repo.record_schedule(db, season="2026-27", matchday=1, team_id=equipo,
+                         opponent_id=rival)
+    assert data_fingerprint(db) != entre, "un calendario nuevo tambien"

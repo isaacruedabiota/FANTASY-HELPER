@@ -28,14 +28,33 @@ log = logging.getLogger(__name__)
 def data_fingerprint(conn: sqlite3.Connection) -> tuple:
     """Huella de los datos que alimentan los modelos.
 
-    Basta con la serie de valores: es la unica entrada del modelo de mercado, y
-    la captura la reescribe siempre que escribe cualquier otra cosa.
+    La serie de valores cubre la captura: es la unica entrada del modelo de
+    mercado, y una captura que escriba cualquier otra cosa la reescribe tambien.
+
+    Pero no cubre `fh mister reprocesar`, que trabaja sobre el crudo ya guardado
+    y no toca ni un valor. Ese reproceso si cambia el calendario y los nombres
+    de los equipos, y sin mirarlos la web seguia sirviendo el modelo anterior:
+    se vio en pantalla, con el rival escrito 'MALAGA' -el nombre viejo, dentro
+    del modelo cacheado- al lado de 'MÁLAGA' recien leido de la tabla.
     """
-    row = conn.execute(
+    valores = conn.execute(
         "SELECT MAX(snapshot_date) AS ultima, COUNT(*) AS filas "
         "FROM player_value_snapshot WHERE provider = 'mister'"
     ).fetchone()
-    return (row["ultima"], row["filas"])
+    # `updated_at` del calendario y de los equipos: cualquier reproceso los
+    # toca, y son dos tablas de veinte y trescientas filas.
+    calendario = conn.execute(
+        "SELECT COUNT(*) AS filas, MAX(updated_at) AS tocado FROM team_schedule"
+    ).fetchone()
+    equipos = conn.execute(
+        "SELECT COUNT(*) AS filas, MAX(name) AS ultimo FROM team"
+    ).fetchone()
+
+    return (
+        valores["ultima"], valores["filas"],
+        calendario["filas"], calendario["tocado"],
+        equipos["filas"], equipos["ultimo"],
+    )
 
 
 @dataclass
