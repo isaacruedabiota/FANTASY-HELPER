@@ -415,3 +415,33 @@ def test_la_deuda_maxima_de_un_rival_sale_de_su_plantilla(db):
     assert fila["saldo_estimado"] == 42_000_000
     assert fila["deuda_estimada"] == 44_000_000
     assert fila["deuda_real"] is None, "de un rival no se publica"
+
+
+def test_quien_desaparece_no_se_queda_pegado_a_su_ultimo_dueno(db):
+    """El fallo de las 87 propiedades fantasma.
+
+    `latest_ownership` cogia la fila mas reciente DE CADA JUGADOR sin mirar de
+    cuando era. Quien sale de la competicion deja de aparecer en el catalogo y
+    por tanto no genera fila nueva, asi que se quedaba en la plantilla de su
+    ultimo dueno para siempre: Horatiu Moldovan salio el 3 de agosto y seguia
+    contando, inflando la plantilla, su valor y el radar de clausulas.
+    """
+    liga = repo.upsert_league(db, provider="mister", external_id="1", name="L")
+    yo = repo.upsert_manager(db, league_id=liga, external_id="10", name="Yo", is_me=True)
+
+    sigue = repo.resolve_player(db, provider="mister", external_id="a", name="Sigue")
+    se_fue = repo.resolve_player(db, provider="mister", external_id="b", name="Se fue")
+    for pid in (sigue, se_fue):
+        repo.record_player_value(db, provider="mister", source="mister",
+                                 player_id=pid, market_value=1_000_000)
+
+    # Ayer los dos eran mios; hoy solo aparece uno.
+    db.execute(
+        "INSERT INTO ownership_snapshot (snapshot_date, captured_at, league_id,"
+        " player_id, manager_id) VALUES ('2026-08-03', '2026-08-03T03:30:00Z', ?, ?, ?)",
+        (liga, se_fue, yo),
+    )
+    repo.record_ownership(db, league_id=liga, player_id=sigue, manager_id=yo)
+
+    nombres = {f["name"] for f in queries.squad(db, yo)}
+    assert nombres == {"Sigue"}, "el que ya no aparece no es de nadie"

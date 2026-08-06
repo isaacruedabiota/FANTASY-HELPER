@@ -599,6 +599,47 @@ def upsert_fixture(
     ).fetchone()["id"]
 
 
+def record_prediction(
+    conn: sqlite3.Connection,
+    *,
+    model: str,
+    player_id: int,
+    season: str,
+    predicted: float,
+    matchday: int | None = None,
+    horizon_date: str | None = None,
+    baseline: float | None = None,
+    detail: dict | None = None,
+    made_on: str | None = None,
+) -> None:
+    """Guarda lo que el modelo dice hoy, para poder juzgarlo manana.
+
+    Se reescribe si vuelve a correr el mismo dia -la captura de la tarde pisa a
+    la de la madrugada- porque lo que interesa de un dia es su ultima palabra,
+    con las alineaciones probables ya publicadas.
+    """
+    conn.execute(
+        """
+        INSERT INTO prediction
+            (made_on, made_at, model, player_id, season, matchday, horizon_date,
+             predicted, baseline, detail_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (model, made_on, player_id) DO UPDATE SET
+            made_at = excluded.made_at,
+            matchday = excluded.matchday,
+            horizon_date = excluded.horizon_date,
+            predicted = excluded.predicted,
+            baseline = excluded.baseline,
+            detail_json = excluded.detail_json
+        """,
+        (
+            made_on or today(), utcnow(), model, player_id, season, matchday,
+            horizon_date, predicted, baseline,
+            json.dumps(detail, ensure_ascii=False) if detail else None,
+        ),
+    )
+
+
 def record_schedule(
     conn: sqlite3.Connection,
     *,

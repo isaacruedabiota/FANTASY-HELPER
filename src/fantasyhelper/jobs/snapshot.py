@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 
+from fantasyhelper import evaluate
 from fantasyhelper.adapters.futbolfantasy.scraper import FutbolFantasyScraper
 from fantasyhelper.adapters.mister.adapter import MisterAdapter
 from fantasyhelper.config import settings
@@ -92,6 +93,27 @@ def run_snapshot(
             except Exception as exc:
                 log.error("reconciliacion: %s", exc)
                 errors.append(f"reconciliacion: {exc}")
+
+        # Lo ultimo de todo: dejar por escrito lo que el modelo dice HOY.
+        #
+        # Va aqui y no en un trabajo aparte porque solo tiene sentido con los
+        # datos del dia recien escritos, y sobre todo porque esto no se puede
+        # recuperar hacia atras: recalcular en octubre lo que el modelo habria
+        # dicho en agosto daria otra cosa, ya que para entonces habra visto los
+        # partidos que tenia que adivinar. Si un dia no se guarda, ese dia no se
+        # puede juzgar nunca.
+        try:
+            with transaction(conn):
+                escritas = evaluate.record(conn)
+            log.info(
+                "predicciones guardadas: %d de puntos, %d de valor",
+                escritas[evaluate.MODEL_POINTS], escritas[evaluate.MODEL_VALUE],
+            )
+        except Exception as exc:
+            # No cuenta como fallo de la captura: los datos, que es lo
+            # irrecuperable, ya estan a salvo.
+            log.error("predicciones: %s", exc)
+            errors.append(f"predicciones: {exc}")
 
         status = "error" if errors and total == 0 else "ok"
         repo.finish_job(

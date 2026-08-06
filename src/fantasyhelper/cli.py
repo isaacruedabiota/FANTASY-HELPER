@@ -138,6 +138,82 @@ def capturar(
 
 
 @app.command()
+def aciertos(
+    jornada: int = typer.Option(None, help="Mirar solo una jornada."),
+) -> None:
+    """Comprueba si el modelo acierta, comparandolo con lo que de verdad paso.
+
+    Solo puede responder sobre los dias en los que la prediccion quedo escrita:
+    recalcularla ahora daria otra cosa, porque el modelo ya ha visto los
+    partidos que tenia que adivinar.
+    """
+    from fantasyhelper import evaluate
+
+    conn = connect()
+    try:
+        cobertura = evaluate.coverage(conn)
+        if not cobertura:
+            console.print(
+                "[yellow]Todavia no hay ninguna prediccion guardada.[/yellow]\n"
+                "Se escriben solas en cada captura; ejecuta 'fh capturar'."
+            )
+            return
+
+        tabla = Table(title="Predicciones guardadas", header_style="bold")
+        for columna in ("Modelo", "Filas", "Dias", "Desde", "Hasta"):
+            tabla.add_column(columna)
+        for fila in cobertura:
+            tabla.add_row(
+                fila["model"], display.money(fila["filas"]), str(fila["dias"]),
+                fila["desde"], fila["hasta"],
+            )
+        console.print(tabla)
+
+        for titulo, scores in (
+            ("Puntos esperados", evaluate.points_accuracy(conn, matchday=jornada)),
+            ("Valor de mercado", evaluate.value_accuracy(conn)),
+        ):
+            _tabla_aciertos(titulo, scores)
+    finally:
+        conn.close()
+
+
+def _tabla_aciertos(titulo: str, scores: list) -> None:
+    from fantasyhelper.evaluate import MIN_SAMPLES
+
+    if not scores:
+        console.print(
+            f"\n[dim]{titulo}: aun no hay nada con que comparar. "
+            "Hace falta que se juegue.[/dim]"
+        )
+        return
+
+    tabla = Table(title=titulo, header_style="bold")
+    for columna in ("", "Casos", "Correlacion", "Error medio", "Predicho", "Real"):
+        tabla.add_column(columna, justify="right")
+    tabla.columns[0].justify = "left"
+
+    for s in scores:
+        # Se marca lo que no es fiable en vez de esconderlo: con veinte casos la
+        # correlacion salta de 0,2 a 0,7 segun quien se lesione.
+        aviso = "" if s.fiable else " [yellow]?[/yellow]"
+        tabla.add_row(
+            s.etiqueta + aviso,
+            str(s.casos),
+            "–" if s.correlacion is None else f"{s.correlacion:+.2f}",
+            "–" if s.error_medio is None else f"{s.error_medio:.2f}",
+            "–" if s.media_predicha is None else f"{s.media_predicha:.2f}",
+            "–" if s.media_real is None else f"{s.media_real:.2f}",
+        )
+    console.print(tabla)
+    if any(not s.fiable for s in scores):
+        console.print(
+            f"[dim]? = menos de {MIN_SAMPLES} casos. La cifra sale, pero no "
+            "significa nada todavia.[/dim]"
+        )
+
+
+@app.command()
 def planificador() -> None:
     """Arranca el planificador que captura automaticamente cada dia."""
     from fantasyhelper.jobs.scheduler import main as scheduler_main

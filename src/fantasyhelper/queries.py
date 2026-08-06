@@ -78,7 +78,19 @@ latest_context AS (
 )
 """
 
-#: Propiedad mas reciente de cada jugador dentro de una liga.
+#: Propiedad de cada jugador SEGUN LA ULTIMA CAPTURA.
+#:
+#: El filtro por fecha no es una optimizacion, es la correccion de un fallo. Sin
+#: el, esto tomaba la fila mas reciente DE CADA JUGADOR sin mirar de cuando era,
+#: y quien desaparece del catalogo no genera fila nueva: se quedaba pegado a su
+#: ultimo dueno para siempre. Horatiu Moldovan salio de la competicion el 3 de
+#: agosto y seguia figurando en mi plantilla; habia 87 casos asi en la liga,
+#: inflando plantillas, valor y radar de clausulas.
+#:
+#: La captura escribe la propiedad de TODA la liga de una vez -catalogo mas
+#: plantilla de cada participante-, asi que quedarse con la ultima fecha deja
+#: una foto coherente. Es lo mismo que ya hacian `standings` y
+#: `estimated_balances`.
 LATEST_OWNERSHIP_CTE = """
 latest_ownership AS (
     SELECT player_id, manager_id, clause_value, clause_locked_until, snapshot_date,
@@ -86,6 +98,7 @@ latest_ownership AS (
                PARTITION BY player_id ORDER BY snapshot_date DESC
            ) AS rn
     FROM ownership_snapshot
+    WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM ownership_snapshot)
 )
 """
 

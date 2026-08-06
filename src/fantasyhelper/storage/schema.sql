@@ -353,6 +353,45 @@ CREATE INDEX IF NOT EXISTS idx_season_stat_season
     ON player_season_stat(season, team_id);
 
 
+-- Lo que el modelo dijo que iba a pasar, el dia que lo dijo.
+--
+-- Es la unica forma de saber si el modelo sirve. Una prediccion solo se puede
+-- juzgar contra lo que ocurrio DESPUES, y para eso hay que haberla guardado
+-- antes: recalcularla mas tarde daria otra cosa, porque para entonces el modelo
+-- ya habra visto los resultados que tenia que adivinar.
+--
+-- Lo que SI ocurrio no se guarda aqui a proposito. Los puntos de cada jornada
+-- estan en `player_points` y los valores en `player_value_snapshot`, los dos
+-- para siempre; duplicarlos aqui solo crearia dos versiones de la verdad. El
+-- acierto se calcula uniendo esta tabla con aquellas.
+--
+-- Una fila por dia, modelo y jugador. Guardar la prediccion de CADA dia y no
+-- solo la ultima permite ademas ver si mejora segun se acerca la jornada, que
+-- es la forma de saber cuanto aportan las alineaciones probables frente al
+-- historico.
+CREATE TABLE IF NOT EXISTS prediction (
+    id            INTEGER PRIMARY KEY,
+    made_on       TEXT NOT NULL,       -- snapshot_date en que se predijo
+    made_at       TEXT NOT NULL,
+    model         TEXT NOT NULL,       -- 'xpts' | 'valor'
+    player_id     INTEGER NOT NULL REFERENCES player(id) ON DELETE CASCADE,
+    season        TEXT NOT NULL,
+    -- xpts: la jornada que predice. valor: la fecha objetivo, a siete dias.
+    matchday      INTEGER,
+    horizon_date  TEXT,
+    -- xpts: puntos esperados. valor: variacion relativa sobre su tramo.
+    predicted     REAL NOT NULL,
+    -- Sobre que se aplica la variacion; sin esto no se puede pasar a euros
+    -- despues, porque el valor de ese dia ya no seria el de partida.
+    baseline      REAL,
+    -- Las piezas del calculo, para poder saber DONDE falla y no solo que falla.
+    detail_json   TEXT,
+    UNIQUE (model, made_on, player_id)
+);
+CREATE INDEX IF NOT EXISTS idx_prediction_jornada
+    ON prediction(model, season, matchday);
+
+
 -- Punto de partida congelado de cada participante.
 --
 -- No basta con recordar la FECHA del reinicio y mirar el snapshot de ese dia:
