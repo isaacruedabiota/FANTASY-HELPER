@@ -59,6 +59,20 @@ El planificador captura a las 03:30 (cuando Mister ya ha actualizado los valores
 Pi estuvo apagada a esa hora, el trabajo se ejecuta igualmente al arrancar dentro de un
 margen de 6 horas, así que no se pierde el día.
 
+## Al actualizar el código: reinicia los DOS servicios
+
+```bash
+sudo systemctl restart fantasyhelper@$USER fantasyhelper-web@$USER
+```
+
+**Los dos, siempre.** El planificador es un proceso de días: importa el código al
+arrancar y no vuelve a mirarlo. Reiniciar solo la web deja la captura nocturna corriendo
+con la versión anterior, y el resultado es desconcertante porque la web se ve bien.
+
+Ya pasó: se arregló que un nombre de equipo bueno no se degradara al slug de
+FutbolFantasy, se reinició la web, y a las 03:30 la captura volvió a dejar
+`RAYO-VALLECANO` en pantalla — con el arreglo ya en el disco desde hacía seis horas.
+
 ## Consultar desde tu ordenador
 
 La base de datos es un único fichero. Para mirar los datos sin entrar por SSH:
