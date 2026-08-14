@@ -5,16 +5,16 @@
 <section>
   <h2>Clasificación y saldo</h2>
   <p class="sub">
-    El valor de la plantilla lo publica Mister y es exacto. El dinero en caja de
-    los rivales no lo publica en ningún sitio, y estimarlo no sale: aquí abajo
-    está la medición.
+    Cuánto podría gastar cada uno si quisiera pagarte una cláusula. La plantilla
+    es exacta; el saldo de los rivales es estimado y se queda corto — cuánto,
+    lo dice la fila de abajo.
   </p>
   <div class="tabla-scroll">
     <table>
       <thead>
         <tr>
           <th>Participante</th><th>Pts</th><th>Jug.</th><th>Plantilla</th>
-          <th>Puede deber</th><th>Tu saldo</th>
+          <th>Saldo est.</th><th>+ deuda 25%</th><th>Máx. que puede gastar</th>
         </tr>
       </thead>
       <tbody>
@@ -23,46 +23,55 @@
         {% for fila in clasificacion %}
           {% set s = saldo_por_id.get(fila.id) %}
           <tr>
-            <td>{% if fila.is_me %}<strong>{{ fila.name }}</strong>{% else %}{{ fila.name }}{% endif %}</td>
+            <td>
+              {%- if fila.is_me -%}<strong>{{ fila.name }}</strong>
+              {%- else -%}{{ fila.name }}{%- endif -%}
+              {%- if s and s.estimacion_rota %} <span class="estado" title="Su plantilla vale más de lo que el cálculo permite: ha cobrado cláusulas que no se ven. Su saldo real es mayor que el estimado.">?</span>{% endif -%}
+            </td>
             <td>{{ fila.points if fila.points is not none else '–' }}</td>
             <td>{{ fila.squad_size }}</td>
             <td>{{ s.valor_plantilla|money if s else '–' }}</td>
-            {# El 25% de la plantilla es exacto: es la regla de la liga aplicada
-               a una cifra que Mister publica. Lo que falta para saber lo que
-               puede gastar es su caja, y eso no se sabe. #}
-            <td>{{ s.deuda_por_plantilla|money if s else '–' }}</td>
-            {# Solo la propia, y la de verdad: la real, no una estimacion. #}
+            {# De ti se ensena el REAL, que se conoce; de los demas el estimado.
+               Se marca cual es cual en vez de mezclarlos sin avisar. #}
             <td>
-              {%- if s and s.saldo_real -%}
+              {%- if s and s.saldo_real is not none -%}
                 <strong>{{ s.saldo_real|money }}</strong>
-              {%- else -%}<span class="meta">–</span>{%- endif -%}
+              {%- elif s -%}{{ s.saldo_estimado|money }}
+              {%- else -%}–{%- endif -%}
+            </td>
+            <td>{{ s.deuda_por_plantilla|money if s else '–' }}</td>
+            <td>
+              {%- if s and s.deuda_real is not none -%}
+                <strong>{{ s.deuda_real|money }}</strong>
+              {%- elif s -%}{{ s.maximo_gasto|money }}
+              {%- else -%}–{%- endif -%}
             </td>
           </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+
+  {% if error_estimacion %}
+    <p class="nota">
+      <strong>Cuánto te puedes fiar.</strong> Sobre el único saldo que se conoce
+      de verdad —el tuyo— la estimación se queda corta en
+      <strong>{{ error_estimacion|money }} €</strong> hoy. Es de esperar que a
+      los demás les pase algo parecido, así que la columna de la derecha es un
+      <em>mínimo</em>: pueden gastar eso o más.
+    </p>
+  {% endif %}
+
   <p class="nota">
-    <strong>Puede deber</strong> es el 25% de su plantilla, que es hasta donde
-    Mister deja endeudarse. Ese número es exacto. Lo que <em>no</em> se sabe es
-    cuánto dinero tiene en caja, así que no se puede decir cuánto puede gastar
-    en total: la suma de las dos cosas es lo que haría falta.
+    <strong>Saldo est.</strong> = 50M − su plantilla − lo gastado en subir
+    cláusulas. En negrita cuando es el real, que solo se sabe del tuyo.
+    <strong>+ deuda 25%</strong> es lo que Mister deja deber sobre el valor de
+    la plantilla; ese sumando sí es exacto.
     <br><br>
-    Aquí había una columna de saldo estimado, calculada como 50M menos su
-    plantilla menos lo gastado en cláusulas. <strong>Estaba mal y se ha
-    quitado.</strong> Contra el único saldo real que existe —el tuyo— daba
-    <strong>−3.368.400 €</strong> frente a <strong>7.621.880 €</strong> reales:
-    once millones de desvío. La identidad se rompe con los clausulazos, que se
-    pagan a 1,5 veces el valor: el que paga pierde media vez y el que cobra la
-    gana, así que se conserva en la liga pero no por participante. Y a ByJonyX
-    le salía un tope <em>negativo</em>, que es imposible.
-    <br><br>
-    Se intentó corregir con el feed, valorando cada traspaso contra el precio de
-    mercado de su día, y no reconcilia: los cuatro criterios probados dejaban
-    errores de entre −6,9 y +14,6 millones. El feed es una ventana que rota, y
-    la Raspberry estuvo apagada del 12 al 14 — esos traspasos no están en
-    ninguna parte. Ahora que se captura cada media hora el feed sí quedará
-    completo, y entonces se puede reintentar.
+    Se queda corta porque un <strong>clausulazo se paga a 1,5 veces el valor</strong>:
+    el que cobra gana media vez el valor y el cálculo no lo ve. Una
+    <span class="estado">?</span> marca a quien ya se le nota — su plantilla vale
+    más de lo que el cálculo permite.
   </p>
 </section>
 

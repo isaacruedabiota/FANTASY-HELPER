@@ -418,7 +418,9 @@ def test_de_un_rival_solo_se_sabe_lo_que_puede_deber(db):
                           clause_level=0, clause_floor=8_000_000)
 
     fila = next(f for f in queries.estimated_balances(db) if f["id"] == rival)
+    assert fila["saldo_estimado"] == 42_000_000
     assert fila["deuda_por_plantilla"] == 2_000_000, "el 25% de su plantilla"
+    assert fila["maximo_gasto"] == 44_000_000, "su caja mas lo que le dejan deber"
     assert fila["saldo_real"] is None, "de un rival no se publica"
     assert fila["deuda_real"] is None
 
@@ -443,7 +445,10 @@ def test_lo_que_puede_deber_nunca_sale_negativo(db):
     fila = next(f for f in queries.estimated_balances(db) if f["id"] == rico)
     assert fila["valor_plantilla"] == 68_000_000
     assert fila["deuda_por_plantilla"] == 17_000_000
-    assert fila["deuda_por_plantilla"] > 0
+    # El maximo sale negativo, y eso NO significa que no pueda gastar: significa
+    # que la estimacion se ha roto para el. Por eso se marca en vez de callarlo.
+    assert fila["maximo_gasto"] < 0
+    assert fila["estimacion_rota"] == 1
 
 
 def test_quien_desaparece_no_se_queda_pegado_a_su_ultimo_dueno(db):
@@ -474,3 +479,34 @@ def test_quien_desaparece_no_se_queda_pegado_a_su_ultimo_dueno(db):
 
     nombres = {f["name"] for f in queries.squad(db, yo)}
     assert nombres == {"Sigue"}, "el que ya no aparece no es de nadie"
+
+
+def test_el_error_de_la_estimacion_se_mide_sobre_el_propio_saldo(db):
+    """Una estimacion sin su error al lado invita a creersela de mas.
+
+    Es el unico contraste posible: Mister solo publica tu saldo. Positivo
+    significa que la estimacion se queda CORTA, que es lo que pasa en cuanto
+    alguien cobra una clausula.
+    """
+    liga = repo.upsert_league(db, provider="mister", external_id="1", name="L")
+    yo = repo.upsert_manager(db, league_id=liga, external_id="10", name="Yo", is_me=True)
+
+    pid = repo.resolve_player(db, provider="mister", external_id="a", name="Uno")
+    repo.record_player_value(db, provider="mister", source="mister",
+                             player_id=pid, market_value=10_000_000)
+    repo.record_ownership(db, league_id=liga, player_id=pid, manager_id=yo)
+    # Estimado: 50M - 10M = 40M. Real: 45M, porque cobro una clausula.
+    repo.record_manager_state(db, manager_id=yo, balance=45_000_000)
+
+    assert queries.estimation_error(db) == 5_000_000
+
+
+def test_sin_saldo_real_no_se_puede_medir_el_error(db):
+    liga = repo.upsert_league(db, provider="mister", external_id="1", name="L")
+    rival = repo.upsert_manager(db, league_id=liga, external_id="20", name="Rival")
+    pid = repo.resolve_player(db, provider="mister", external_id="a", name="Uno")
+    repo.record_player_value(db, provider="mister", source="mister",
+                             player_id=pid, market_value=10_000_000)
+    repo.record_ownership(db, league_id=liga, player_id=pid, manager_id=rival)
+
+    assert queries.estimation_error(db) is None

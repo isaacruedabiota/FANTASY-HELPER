@@ -246,6 +246,10 @@ def liga(request: Request):
             titulo="La liga",
             clasificacion=queries.standings(conn),
             saldos=queries.estimated_balances(conn),
+            # El error medido sobre el propio saldo, que es el unico contraste
+            # posible. Va a la pantalla porque una estimacion sin su error al
+            # lado invita a creersela mas de lo que toca.
+            error_estimacion=queries.estimation_error(conn),
             reglas=load_rules(conn),
             # Todos, sin tope. El feed crece unas pocas tarjetas al dia y
             # cortarlo escondia justo lo que se busca al mirarlo.

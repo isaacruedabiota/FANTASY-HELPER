@@ -677,20 +677,82 @@ def estimated_balances(conn: sqlite3.Connection) -> list[dict]:
                sr.balance AS saldo_real,
                sr.future_balance AS futuro_real,
                sr.max_debt AS deuda_real,
-               -- Lo unico exacto de la capacidad de gasto de un rival: el
-               -- cuarto de plantilla que la liga deja deber. Su dinero en caja
-               -- NO entra aqui, porque no se sabe (ver el aviso de arriba).
-               p.valor * ? AS deuda_por_plantilla
+               -- El cuarto de plantilla que la liga deja deber. Este sumando SI
+               -- es exacto: es una regla verificada al euro sobre una cifra que
+               -- Mister publica.
+               p.valor * ? AS deuda_por_plantilla,
+               -- Lo maximo que podria poner encima de la mesa: su caja mas esa
+               -- deuda. Hereda la incertidumbre del saldo estimado, que es
+               -- mucha; `estimacion_rota` avisa de cuando se nota a simple
+               -- vista.
+               (? - p.valor - COALESCE(ch.gasto, 0)) + p.valor * ?
+                   AS maximo_gasto,
+               -- Un saldo negativo no puede ser: significa que esa persona ha
+               -- cobrado clausulas que la identidad no ve, asi que su fila esta
+               -- desplazada hacia abajo en una cantidad desconocida.
+               CASE WHEN (? - p.valor - COALESCE(ch.gasto, 0)) < 0
+                    THEN 1 ELSE 0 END AS estimacion_rota
         FROM plantilla_hoy p
         JOIN manager m ON m.id = p.manager_id
         LEFT JOIN clausulas_hoy ch ON ch.manager_id = m.id
         LEFT JOIN saldo_real sr ON sr.manager_id = m.id AND sr.rn = 1
-        ORDER BY p.valor DESC
+        ORDER BY maximo_gasto DESC
         """,
-        (CLAUSE_STEP_COST_RATIO, INITIAL_BUDGET, MAX_DEBT_RATIO),
+        (
+            CLAUSE_STEP_COST_RATIO, INITIAL_BUDGET, MAX_DEBT_RATIO,
+            INITIAL_BUDGET, MAX_DEBT_RATIO, INITIAL_BUDGET,
+        ),
     ).fetchall()
 
     return [dict(fila) for fila in filas]
+
+
+def estimation_error(conn: sqlite3.Connection) -> int | None:
+    """Cuanto se equivoca hoy la estimacion de saldo, medido sobre el propio.
+
+    Es el unico contraste posible -Mister solo publica tu saldo- y por eso viaja
+    hasta la pantalla: una estimacion sin su error al lado invita a creersela
+    mas de lo que toca, y esta se equivoca en millones.
+
+    Positivo = la estimacion se queda CORTA, es decir que en realidad hay mas
+    dinero del que dice. Es lo normal en quien ha cobrado clausulas.
+    """
+    fila = conn.execute(
+        """
+        WITH plantilla_hoy AS (
+            SELECT o.manager_id, SUM(v.market_value) AS valor
+            FROM ownership_snapshot o
+            JOIN player_value_snapshot v
+              ON v.player_id = o.player_id AND v.provider = 'mister'
+             AND v.source = 'mister' AND v.snapshot_date = o.snapshot_date
+            WHERE o.snapshot_date = (SELECT MAX(snapshot_date) FROM ownership_snapshot)
+              AND o.manager_id IS NOT NULL
+            GROUP BY o.manager_id
+        ),
+        clausulas_hoy AS (
+            SELECT o.manager_id,
+                   SUM(COALESCE(o.clause_level, 0) * o.clause_floor * ?) AS gasto
+            FROM ownership_snapshot o
+            WHERE o.snapshot_date = (SELECT MAX(snapshot_date) FROM ownership_snapshot)
+              AND o.clause_floor IS NOT NULL
+            GROUP BY o.manager_id
+        ),
+        saldo_real AS (
+            SELECT manager_id, balance,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY manager_id ORDER BY snapshot_date DESC
+                   ) AS rn
+            FROM manager_snapshot WHERE balance IS NOT NULL
+        )
+        SELECT sr.balance - (? - p.valor - COALESCE(ch.gasto, 0)) AS error
+        FROM plantilla_hoy p
+        JOIN manager m ON m.id = p.manager_id AND m.is_me = 1
+        LEFT JOIN clausulas_hoy ch ON ch.manager_id = m.id
+        JOIN saldo_real sr ON sr.manager_id = m.id AND sr.rn = 1
+        """,
+        (CLAUSE_STEP_COST_RATIO, INITIAL_BUDGET),
+    ).fetchone()
+    return fila["error"] if fila else None
 
 
 def spendable(
