@@ -40,9 +40,15 @@
               {%- else -%}–{%- endif -%}
             </td>
             <td>{{ s.deuda_por_plantilla|money if s else '–' }}</td>
+            {# Con la estimacion rota, la suma sale negativa y un maximo de
+               gasto negativo no significa nada. Se ensena entonces solo el
+               sumando exacto -lo que le dejan deber- y se marca, porque decir
+               cero seria tan falso como decir menos setecientos mil. #}
             <td>
               {%- if s and s.deuda_real is not none -%}
                 <strong>{{ s.deuda_real|money }}</strong>
+              {%- elif s and s.estimacion_rota -%}
+                {{ s.deuda_por_plantilla|money }}<span class="estado" title="Solo la parte exacta: lo que le dejan deber. Su dinero en caja no se sabe, y el cálculo se le queda corto.">*</span>
               {%- elif s -%}{{ s.maximo_gasto|money }}
               {%- else -%}–{%- endif -%}
             </td>
@@ -71,7 +77,11 @@
     Se queda corta porque un <strong>clausulazo se paga a 1,5 veces el valor</strong>:
     el que cobra gana media vez el valor y el cálculo no lo ve. Una
     <span class="estado">?</span> marca a quien ya se le nota — su plantilla vale
-    más de lo que el cálculo permite.
+    más de lo que el cálculo permite, así que tiene más dinero del que aquí sale.
+    <br><br>
+    En esos casos la última columna lleva <span class="estado">*</span> y muestra
+    <em>solo lo que le dejan deber</em>, que es la parte exacta. Su caja no se
+    sabe, y un máximo negativo no significa nada.
   </p>
 </section>
 
