@@ -86,6 +86,19 @@ class Once:
         ]
 
 
+def normalize_formation(formation: str | None) -> str | None:
+    """La formacion de Mister en la misma forma que la nuestra.
+
+    Mister la escribe contando al portero: '1-3-5-2' es lo que aqui se llama
+    '3-5-2'. Sin esto, la pantalla avisaba de cambiar la formacion incluso
+    cuando ya era la puesta, que es el peor tipo de aviso: el que se ignora.
+    """
+    partes = [parte for parte in (formation or "").split("-") if parte.strip()]
+    if len(partes) == 4 and partes[0] == "1":
+        partes = partes[1:]
+    return "-".join(partes) or None
+
+
 def position_baseline(predictions: dict[int, dict]) -> dict[str, float]:
     """Lo que rinde un jugador cualquiera de cada puesto.
 
@@ -273,19 +286,31 @@ def _avisos(once: Once) -> list[str]:
             f"jornada: {nombres}."
         )
 
+    juegan = [f for f in once.titulares if _puntos(f) > 0 and not f.get("motivo")]
+
     dudosos = [
-        f for f in once.titulares
-        if _puntos(f) > 0
-        and (f.get("probability") or 0) < RISKY_PROBABILITY
-        and not f.get("motivo")
+        f for f in juegan
+        if f.get("probability") is not None and f["probability"] < RISKY_PROBABILITY
     ]
     if dudosos:
         nombres = ", ".join(
-            f"{f['name']} ({(f.get('probability') or 0) * 100:.0f}%)" for f in dudosos
+            f"{f['name']} ({f['probability'] * 100:.0f}%)" for f in dudosos
         )
         avisos.append(f"Menos de la mitad de probabilidad de ser titular: {nombres}.")
 
-    sin_datos = [f for f in once.titulares if f.get("sin_datos")]
+    # Sin probabilidad NO es cero: es que no hay alineacion probable publicada de
+    # ese jugador, cosa que suele significar que no se cuenta con el. El modelo
+    # le supone ese UNKNOWN_PROBABILITY, y decirlo es mas honesto que ensenar un
+    # 0% que nadie ha medido.
+    sin_once = [f for f in juegan if f.get("probability") is None]
+    if sin_once:
+        nombres = ", ".join(f["name"] for f in sin_once)
+        avisos.append(
+            "No aparecen en ninguna alineación probable, así que van con el "
+            f"{queries.UNKNOWN_PROBABILITY:.0%} de oficio: {nombres}."
+        )
+
+    sin_datos = [f for f in juegan if f.get("sin_datos")]
     if sin_datos:
         nombres = ", ".join(f["name"] for f in sin_datos)
         avisos.append(
@@ -448,3 +473,9 @@ def recommend(
         "tope": budget,
         "mejoras": mejoras[:limit],
     }
+
+
+def current_formation(conn: sqlite3.Connection) -> str | None:
+    """La formacion que tengo puesta en Mister, en nuestra notacion."""
+    fila = queries.my_manager(conn)
+    return normalize_formation(fila["formation"]) if fila else None

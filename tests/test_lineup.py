@@ -225,6 +225,38 @@ def test_se_avisa_de_los_titulares_dudosos():
     assert any("Duda (30%)" in aviso for aviso in once.avisos)
 
 
+def test_sin_probabilidad_no_es_cero_por_ciento():
+    """No hay dato de alineacion probable, que no es lo mismo que un 0%."""
+    filas = plantilla(4, 4, 1)
+    filas.append(jugador("Sin once", "DL", 1.0, probability=None))
+
+    avisos = " ".join(lineup.best_xi(filas).avisos)
+    assert "Sin once" in avisos
+    assert "Sin once (0%)" not in avisos, "nadie ha medido ese cero"
+    assert "alineación probable" in avisos
+    assert "20% de oficio" in avisos
+
+
+def test_no_se_avisa_del_historial_de_quien_no_va_a_jugar():
+    """Que a un lesionado le falte historico no le importa a nadie."""
+    filas = plantilla(4, 4, 1)
+    filas.append(jugador("Roto", "DL", 0.0, status="lesionado", sin_datos=True,
+                         motivo="lesionado"))
+
+    avisos = " ".join(lineup.best_xi(filas).avisos)
+    assert "media de su puesto" not in avisos
+
+
+@pytest.mark.parametrize(
+    ("mister", "nuestra"),
+    [("1-3-5-2", "3-5-2"), ("1-4-4-2", "4-4-2"), ("4-4-2", "4-4-2"),
+     (None, None), ("", None)],
+)
+def test_la_formacion_de_mister_cuenta_al_portero(mister, nuestra):
+    """'1-3-5-2' y '3-5-2' son la misma; sin esto la web pedia cambiarla siempre."""
+    assert lineup.normalize_formation(mister) == nuestra
+
+
 # --- que fichaje mejora el once ---------------------------------------------
 
 

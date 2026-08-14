@@ -8,9 +8,9 @@
   <div class="tile hero">
     <span class="etiqueta">
       Formación
-      {%- if me.formation and once.formacion != '–' %}
-        {%- if me.formation == once.formacion %} · ya la tienes puesta
-        {%- else %} · tienes {{ me.formation }}{% endif -%}
+      {%- if formacion_actual and once.completo %}
+        {%- if formacion_actual == once.formacion %} · ya la tienes puesta
+        {%- else %} · <strong>cámbiala</strong>, tienes {{ formacion_actual }}{% endif -%}
       {%- endif -%}
     </span>
     <span class="cifra">{{ once.formacion }}</span>

@@ -193,6 +193,10 @@ def once(request: Request):
             request, "once.html", conn,
             titulo="El once",
             me=me,
+            # Mister cuenta al portero en la formacion ('1-3-5-2'); aqui no.
+            # Sin normalizar, la pantalla pedia cambiar la formacion incluso
+            # cuando ya era la puesta.
+            formacion_actual=lineup.normalize_formation(me["formation"]),
             nombres_linea=lineup.LINE_NAMES,
             **datos,
         )

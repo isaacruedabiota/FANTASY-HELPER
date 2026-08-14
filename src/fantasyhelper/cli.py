@@ -337,8 +337,9 @@ def once(
         cabecera = f"Jornada {datos['jornada'] or '?'}"
         if alineacion.completo:
             cabecera += f" · [bold]{alineacion.formacion}[/bold]"
-            if me["formation"] and me["formation"] != alineacion.formacion:
-                cabecera += f" (tienes puesto el {me['formation']})"
+            actual = lineup.normalize_formation(me["formation"])
+            if actual and actual != alineacion.formacion:
+                cabecera += f" (cambiala, tienes el {actual})"
             cabecera += f" · {display.points(alineacion.puntos)} puntos esperados"
         console.print(f"\n{cabecera}\n")
 
