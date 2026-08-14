@@ -286,7 +286,11 @@ def _avisos(once: Once) -> list[str]:
             f"jornada: {nombres}."
         )
 
-    juegan = [f for f in once.titulares if _puntos(f) > 0 and not f.get("motivo")]
+    # Los avisos que siguen hablan de quien VA a jugar. Basta con mirar los
+    # puntos: el que descansa o esta lesionado ya vale cero y queda fuera solo.
+    # (Filtrar ademas por `motivo` dejaba mudo el aviso de "sin datos", porque
+    # ese motivo es precisamente el suyo.)
+    juegan = [f for f in once.titulares if _puntos(f) > 0]
 
     dudosos = [
         f for f in juegan

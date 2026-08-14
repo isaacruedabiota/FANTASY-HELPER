@@ -237,6 +237,18 @@ def test_sin_probabilidad_no_es_cero_por_ciento():
     assert "20% de oficio" in avisos
 
 
+def test_se_avisa_del_titular_sin_historial():
+    """El aviso llego a quedarse mudo: su motivo ES 'sin datos' y se filtraba."""
+    filas = plantilla(4, 4, 1)
+    filas.append(jugador("Debut", "DL", None, probability=0.9))
+    lineup.for_matchday(filas, 1, baseline={"DL": 4.0, "DF": 3.0, "MC": 3.0,
+                                            "PT": 3.0})
+
+    avisos = " ".join(lineup.best_xi(filas).avisos)
+    assert "media de su puesto" in avisos
+    assert "Debut" in avisos
+
+
 def test_no_se_avisa_del_historial_de_quien_no_va_a_jugar():
     """Que a un lesionado le falte historico no le importa a nadie."""
     filas = plantilla(4, 4, 1)
