@@ -5,16 +5,16 @@
 <section>
   <h2>Clasificación y saldo</h2>
   <p class="sub">
-    Mister solo publica tu propio saldo. El del resto sale de una identidad que
-    se mantiene sola: 50M menos el valor de su plantilla de hoy menos lo gastado
-    en subir cláusulas.
+    El valor de la plantilla lo publica Mister y es exacto. El dinero en caja de
+    los rivales no lo publica en ningún sitio, y estimarlo no sale: aquí abajo
+    está la medición.
   </p>
   <div class="tabla-scroll">
     <table>
       <thead>
         <tr>
           <th>Participante</th><th>Pts</th><th>Jug.</th><th>Plantilla</th>
-          <th>Saldo est.</th><th>Tope de gasto</th><th>Saldo real</th>
+          <th>Puede deber</th><th>Tu saldo</th>
         </tr>
       </thead>
       <tbody>
@@ -27,34 +27,42 @@
             <td>{{ fila.points if fila.points is not none else '–' }}</td>
             <td>{{ fila.squad_size }}</td>
             <td>{{ s.valor_plantilla|money if s else '–' }}</td>
-            <td>{{ s.saldo_estimado|money if s else '–' }}</td>
-            {# De ti se sabe la de verdad; de los demas hay que estimarla. Se
-               marca cual es cual en vez de mezclarlas sin avisar. #}
+            {# El 25% de la plantilla es exacto: es la regla de la liga aplicada
+               a una cifra que Mister publica. Lo que falta para saber lo que
+               puede gastar es su caja, y eso no se sabe. #}
+            <td>{{ s.deuda_por_plantilla|money if s else '–' }}</td>
+            {# Solo la propia, y la de verdad: la real, no una estimacion. #}
             <td>
-              {%- if s and s.deuda_real -%}
-                <strong>{{ s.deuda_real|money }}</strong>
-              {%- elif s -%}
-                {{ s.deuda_estimada|money }}
-              {%- else -%}–{%- endif -%}
+              {%- if s and s.saldo_real -%}
+                <strong>{{ s.saldo_real|money }}</strong>
+              {%- else -%}<span class="meta">–</span>{%- endif -%}
             </td>
-            <td>{{ s.saldo_real|money if s and s.saldo_real else '–' }}</td>
           </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
   <p class="nota">
-    <strong>Tope de gasto</strong> es lo máximo que podría poner encima de la
-    mesa: su saldo más el <strong>25% del valor de su plantilla</strong>, que es
-    lo que Mister deja deber. Es el número que dice quién puede pagarte una
-    cláusula, y sale bastante mayor que su saldo.
+    <strong>Puede deber</strong> es el 25% de su plantilla, que es hasta donde
+    Mister deja endeudarse. Ese número es exacto. Lo que <em>no</em> se sabe es
+    cuánto dinero tiene en caja, así que no se puede decir cuánto puede gastar
+    en total: la suma de las dos cosas es lo que haría falta.
     <br><br>
-    La fórmula sale de la cifra que Mister publica de ti —<code>maxDebt</code> =
-    saldo futuro + 25% de la plantilla— y cuadra al euro. Pero es un
-    <strong>techo, no una previsión</strong>: de los rivales no se ven las pujas
-    que tengan lanzadas, y ese dinero ya está comprometido. La tuya, en negrita,
-    es la de verdad, y la distancia entre las dos te dice cuánto puede engañar
-    esta columna.
+    Aquí había una columna de saldo estimado, calculada como 50M menos su
+    plantilla menos lo gastado en cláusulas. <strong>Estaba mal y se ha
+    quitado.</strong> Contra el único saldo real que existe —el tuyo— daba
+    <strong>−3.368.400 €</strong> frente a <strong>7.621.880 €</strong> reales:
+    once millones de desvío. La identidad se rompe con los clausulazos, que se
+    pagan a 1,5 veces el valor: el que paga pierde media vez y el que cobra la
+    gana, así que se conserva en la liga pero no por participante. Y a ByJonyX
+    le salía un tope <em>negativo</em>, que es imposible.
+    <br><br>
+    Se intentó corregir con el feed, valorando cada traspaso contra el precio de
+    mercado de su día, y no reconcilia: los cuatro criterios probados dejaban
+    errores de entre −6,9 y +14,6 millones. El feed es una ventana que rota, y
+    la Raspberry estuvo apagada del 12 al 14 — esos traspasos no están en
+    ninguna parte. Ahora que se captura cada media hora el feed sí quedará
+    completo, y entonces se puede reintentar.
   </p>
 </section>
 

@@ -76,10 +76,18 @@
   O sea que la deuda máxima <em>ya es</em> lo que puedes gastar, y no se suma al
   saldo. Es el tope que usa <strong>Comprar</strong>.
   <br><br>
-  <strong>€/sem</strong> suma lo que paga la liga por los puntos esperados
-  ({{ datos.euros_por_punto|money }} € cada uno) y lo que se espera que suba de
-  valor. Ojo: en esta liga la bonificación por puesto va al revés, así que sumar
-  puntos reduce ese otro ingreso.
+  <strong>€/sem</strong> suma dos cosas de naturaleza distinta: lo que paga la
+  liga por los puntos esperados ({{ datos.euros_por_punto|money }} € cada uno),
+  que es dinero de verdad, y cuánto se espera que el jugador
+  <strong>se aparte de los de su mismo precio</strong> — que es
+  <em>relativo</em>, no absoluto.
+  <br><br>
+  Por eso un jugador puede subir todos los días y aun así marcar en rojo:
+  significa que sube <em>menos que los de su precio</em>, no que vaya a bajar.
+  El desglose de cada uno está en su ficha.
+  <br><br>
+  Ojo también: en esta liga la bonificación por puesto va al revés, así que
+  sumar puntos reduce ese otro ingreso.
   <br><br>
   Los escudos de cada tarjeta son los rivales de las próximas jornadas, y es por
   ese calendario por lo que se ordenan <strong>Comprar</strong> y

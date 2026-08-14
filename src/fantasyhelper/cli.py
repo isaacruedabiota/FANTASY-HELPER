@@ -913,8 +913,11 @@ def saldos() -> None:
             )
         console.print(table)
         console.print(
-            "\n[dim]saldo = 50M − plantilla − clausulas. Comprar o vender a precio de "
-            "mercado no altera la suma: solo mueve dinero entre caja y plantilla.[/dim]"
+            "\n[dim]saldo = 50M − plantilla − clausulas. La identidad se rompe con los\n"
+            "clausulazos, que se pagan a 1,5 veces el valor: el que paga pierde media\n"
+            "vez y el que cobra la gana, asi que se conserva en la liga pero no por\n"
+            "participante. Mira la columna Desvio antes de fiarte de una fila: el\n"
+            "14/08/2026 el propio saldo salia con once millones de error.[/dim]"
         )
     finally:
         conn.close()

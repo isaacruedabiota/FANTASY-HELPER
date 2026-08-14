@@ -625,6 +625,23 @@ def estimated_balances(conn: sqlite3.Connection) -> list[dict]:
 
     Se devuelve tambien el saldo real cuando se conoce -solo el propio-, que es
     la unica forma de saber si la estimacion vale.
+
+    Y NO VALE. Medido el 14 de agosto de 2026 contra el unico saldo real que
+    existe, el propio: estimado -3.368.400 € frente a 7.621.880 € reales, once
+    millones de desvio sobre cifras de esa misma magnitud.
+
+    La identidad se rompe con los clausulazos. Se pagan a ~1,5 veces el valor,
+    asi que el que paga pierde media vez el valor y el que cobra la gana: se
+    conserva en la liga, pero no por participante. Se intento corregir con el
+    feed, valorando cada traspaso contra el precio de mercado de ese dia, y no
+    reconcilia -los cuatro criterios probados dejaban errores de entre -6,9 y
+    +14,6 millones-, porque el feed es una ventana rodante y la Raspberry estuvo
+    apagada del 12 al 14: esos traspasos no estan en ninguna parte.
+
+    Por eso `saldo_estimado` ya no se ensena en la web. Se deja calculado aqui
+    porque la CLI lo usa y porque el dia que el feed este completo -desde que se
+    captura cada media hora, lo estara- se puede volver a intentar la
+    correccion y contrastarla contra el saldo propio.
     """
     filas = conn.execute(
         """
@@ -660,18 +677,17 @@ def estimated_balances(conn: sqlite3.Connection) -> list[dict]:
                sr.balance AS saldo_real,
                sr.future_balance AS futuro_real,
                sr.max_debt AS deuda_real,
-               -- Lo que podria comprometer ahora mismo: su saldo mas el cuarto
-               -- de plantilla que la liga le deja deber. Con `saldo_estimado`
-               -- porque el suyo de verdad no se publica.
-               (? - p.valor - COALESCE(ch.gasto, 0)) + p.valor * ?
-                   AS deuda_estimada
+               -- Lo unico exacto de la capacidad de gasto de un rival: el
+               -- cuarto de plantilla que la liga deja deber. Su dinero en caja
+               -- NO entra aqui, porque no se sabe (ver el aviso de arriba).
+               p.valor * ? AS deuda_por_plantilla
         FROM plantilla_hoy p
         JOIN manager m ON m.id = p.manager_id
         LEFT JOIN clausulas_hoy ch ON ch.manager_id = m.id
         LEFT JOIN saldo_real sr ON sr.manager_id = m.id AND sr.rn = 1
-        ORDER BY saldo_estimado DESC
+        ORDER BY p.valor DESC
         """,
-        (CLAUSE_STEP_COST_RATIO, INITIAL_BUDGET, INITIAL_BUDGET, MAX_DEBT_RATIO),
+        (CLAUSE_STEP_COST_RATIO, INITIAL_BUDGET, MAX_DEBT_RATIO),
     ).fetchall()
 
     return [dict(fila) for fila in filas]

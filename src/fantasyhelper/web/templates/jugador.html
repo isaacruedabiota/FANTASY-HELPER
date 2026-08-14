@@ -28,6 +28,59 @@
   </div>
 </div>
 
+{# El desglose, porque la cifra de arriba suma dos cosas de naturaleza distinta
+   y una de ellas es RELATIVA. Sin esto, un jugador que sube todos los dias pero
+   algo menos que los de su precio aparece con un numero rojo, y eso se lee como
+   "va a bajar" cuando dice lo contrario. Paso con Endrick: subiendo 50.000 € al
+   dia, marcaba -10.315. #}
+<section>
+  <h2>De dónde sale ese número</h2>
+  <div class="tabla-scroll">
+    <table>
+      <tbody>
+        <tr>
+          <td>Por los puntos que se esperan de él</td>
+          <td>
+            {%- if jugador.euros_por_puntos is not none -%}
+              {{ m.euros(jugador.euros_por_puntos, cero=true) }}
+            {%- else -%}
+              <span class="meta">–</span>
+            {%- endif -%}
+          </td>
+        </tr>
+        {% if jugador.ventaja is not none %}
+          <tr>
+            <td>
+              Frente a los de su precio ({{ jugador.tramo }})
+              <span class="meta">
+                él {{ jugador.cambio_reciente|percent }} ·
+                su tramo {{ jugador.centro_tramo|percent }}
+              </span>
+            </td>
+            <td>{{ m.euros(jugador.euros_ventaja, cero=true) }}</td>
+          </tr>
+        {% endif %}
+        <tr>
+          <td><strong>Total</strong></td>
+          <td><strong>{{ m.euros(jugador.rendimiento_semanal, cero=true) }}</strong></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  {% if jugador.ventaja is not none %}
+    <p class="nota">
+      La segunda fila es <strong>relativa, no absoluta</strong>. Dice cuánto se
+      espera que se aparte de los de su mismo precio, que es lo único que el
+      modelo llegó a medir. Si sale en rojo mientras el jugador sube, significa
+      que <em>sube menos que ellos</em> — no que vaya a bajar.
+      {% if jugador.centro_tramo and jugador.centro_tramo > 0.02 %}
+        Ahora mismo su tramo va {{ jugador.centro_tramo|percent }} en siete días,
+        así que quedarse por debajo sigue siendo subir.
+      {% endif %}
+    </p>
+  {% endif %}
+</section>
+
 {% if jugador.proximas %}
 <section>
   <h2>Próximas jornadas</h2>

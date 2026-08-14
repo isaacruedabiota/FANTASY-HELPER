@@ -399,8 +399,15 @@ def test_sin_pujas_lanzadas_se_usa_el_saldo_disponible(db):
     assert queries.spendable(None, None, 40_000_000) is None
 
 
-def test_la_deuda_maxima_de_un_rival_sale_de_su_plantilla(db):
-    """Es el numero que dice quien puede pagarte una clausula."""
+def test_de_un_rival_solo_se_sabe_lo_que_puede_deber(db):
+    """Su caja no se publica en ningun sitio, asi que no se inventa.
+
+    Lo unico exacto de su capacidad de gasto es el cuarto de plantilla que la
+    liga deja deber, porque el valor de la plantilla si lo publica Mister. Hubo
+    una columna que sumaba ademas un saldo estimado y estaba mal: contra el
+    unico saldo real que existe fallaba por once millones, y a un participante
+    con la plantilla por encima de 50M le salia un tope NEGATIVO.
+    """
     liga = repo.upsert_league(db, provider="mister", external_id="1", name="L")
     rival = repo.upsert_manager(db, league_id=liga, external_id="20", name="Rival")
 
@@ -411,10 +418,32 @@ def test_la_deuda_maxima_de_un_rival_sale_de_su_plantilla(db):
                           clause_level=0, clause_floor=8_000_000)
 
     fila = next(f for f in queries.estimated_balances(db) if f["id"] == rival)
-    # 50M - 8M de plantilla = 42M de saldo, mas un cuarto de los 8M.
-    assert fila["saldo_estimado"] == 42_000_000
-    assert fila["deuda_estimada"] == 44_000_000
-    assert fila["deuda_real"] is None, "de un rival no se publica"
+    assert fila["deuda_por_plantilla"] == 2_000_000, "el 25% de su plantilla"
+    assert fila["saldo_real"] is None, "de un rival no se publica"
+    assert fila["deuda_real"] is None
+
+
+def test_lo_que_puede_deber_nunca_sale_negativo(db):
+    """Aunque su plantilla valga mas que el presupuesto de salida.
+
+    Es lo que delataba la columna anterior: ByJonyX tenia 67,7M de plantilla
+    -mas que los 50M con los que empieza todo el mundo- y le salia un tope de
+    -765.250 €, que no significa nada.
+    """
+    liga = repo.upsert_league(db, provider="mister", external_id="1", name="L")
+    rico = repo.upsert_manager(db, league_id=liga, external_id="20", name="Rico")
+
+    for indice in range(4):
+        pid = repo.resolve_player(db, provider="mister", external_id=f"p{indice}",
+                                  name=f"Caro {indice}")
+        repo.record_player_value(db, provider="mister", source="mister",
+                                 player_id=pid, market_value=17_000_000)
+        repo.record_ownership(db, league_id=liga, player_id=pid, manager_id=rico)
+
+    fila = next(f for f in queries.estimated_balances(db) if f["id"] == rico)
+    assert fila["valor_plantilla"] == 68_000_000
+    assert fila["deuda_por_plantilla"] == 17_000_000
+    assert fila["deuda_por_plantilla"] > 0
 
 
 def test_quien_desaparece_no_se_queda_pegado_a_su_ultimo_dueno(db):
