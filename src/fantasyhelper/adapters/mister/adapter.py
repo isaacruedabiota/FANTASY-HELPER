@@ -741,6 +741,12 @@ class MisterAdapter:
                 future_balance=self.user.future_balance,
                 max_debt=self.user.max_debt,
             )
+            # La formacion que tiene puesta. Es lo que convierte "alinea a
+            # estos once" en una instruccion: si el once propuesto no cabe en
+            # su formacion, lo primero es cambiarla.
+            repo.record_manager_formation(
+                conn, manager_id=manager_id, formation=self.user.formation
+            )
             log.info(
                 "soy %s en '%s', saldo %s €",
                 self.user.name, self.user.league_name, f"{self.user.balance:,}".replace(",", "."),

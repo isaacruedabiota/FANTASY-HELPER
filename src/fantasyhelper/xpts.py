@@ -284,6 +284,23 @@ def next_fixtures(conn: sqlite3.Connection) -> dict[int, sqlite3.Row]:
     return {fila["team_id"]: fila for fila in filas}
 
 
+def current_matchday(conn: sqlite3.Connection) -> int | None:
+    """La jornada que se juega ahora: la primera sin terminar del calendario.
+
+    Es la MINIMA de las pendientes y no la del proximo partido de cada equipo,
+    porque esas dos cosas no coinciden para todos. Con el Mundial hay seis
+    equipos que descansan la primera jornada: su proximo partido es de la
+    segunda, y aun asi la jornada en juego es la primera. La diferencia decide
+    quien puntua este fin de semana y quien no.
+    """
+    fila = conn.execute(
+        "SELECT MIN(matchday) AS j FROM fixture "
+        "WHERE season = ? AND status != 'finished'",
+        (settings.season,),
+    ).fetchone()
+    return fila["j"] if fila else None
+
+
 def upcoming(
     conn: sqlite3.Connection, *, matchdays: int = LOOKAHEAD_MATCHDAYS
 ) -> dict[int, list[sqlite3.Row]]:
@@ -462,14 +479,18 @@ def expected_points(
     calendario = next_fixtures(conn)
     proximas = upcoming(conn)
 
-    equipos = {
-        fila["id"]: fila["team_id"]
-        for fila in conn.execute("SELECT id, team_id FROM player")
+    # La posicion viaja con la prediccion para que quien alinee pueda sacar la
+    # referencia de cada puesto sin volver a la base de datos. Un debutante no
+    # tiene media propia, y compararlo con la de su puesto es lo mas honesto
+    # que se puede hacer con el.
+    plantillas = {
+        fila["id"]: (fila["team_id"], fila["position"])
+        for fila in conn.execute("SELECT id, team_id, position FROM player")
     }
 
     resultado: dict[int, dict] = {}
     for player_id, media in medias.items():
-        equipo = equipos.get(player_id)
+        equipo, posicion = plantillas.get(player_id, (None, None))
         partido = calendario.get(equipo)
         ajustes = Adjustments()
         if partido is not None:
@@ -486,6 +507,7 @@ def expected_points(
         siguientes = proximas.get(equipo) or []
         resultado[player_id] = {
             "media_base": media,
+            "position": posicion,
             "ajuste_rival": ajustes.opponent,
             "ajuste_sede": ajustes.venue,
             "matchday": partido["matchday"] if partido is not None else None,
@@ -552,10 +574,13 @@ def attach(
         xpts = None
         if prediccion is not None:
             xpts = prediccion["xpts_si_juega"] * probabilidad
+            # `matchday` es la jornada del PROXIMO partido de su equipo, que no
+            # tiene por que ser la que se juega ahora: quien descansa por el
+            # Mundial la tiene una mas alta. Alinear mira esa diferencia.
             datos.update(
                 {clave: prediccion[clave]
-                 for clave in ("media_base", "ajuste_rival", "ajuste_sede",
-                               "ajuste_calendario", "proximas")}
+                 for clave in ("media_base", "matchday", "ajuste_rival",
+                               "ajuste_sede", "ajuste_calendario", "proximas")}
             )
             # Lo que rendiria por jornada durante las proximas semanas, en vez
             # de solo la que viene. Es lo que importa al fichar: un jugador se

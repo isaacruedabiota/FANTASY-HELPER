@@ -175,7 +175,8 @@ def mister_ids(conn: sqlite3.Connection) -> tuple[dict[int, str], dict[int, str]
 def my_manager(conn: sqlite3.Connection) -> sqlite3.Row | None:
     """El participante que soy yo, identificado al capturar /team."""
     return conn.execute(
-        "SELECT id, external_id, name, league_id FROM manager WHERE is_me = 1 LIMIT 1"
+        "SELECT id, external_id, name, league_id, formation "
+        "FROM manager WHERE is_me = 1 LIMIT 1"
     ).fetchone()
 
 

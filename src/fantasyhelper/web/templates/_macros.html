@@ -92,8 +92,8 @@
    vas a fichar le viene un calendario amable. El color del borde dice si la
    jornada suma o resta, y el `title` lo escribe con palabras para quien no
    distinga los tonos. #}
-{% macro calendario(fila) %}
-  {%- if fila.proximas -%}
+{% macro calendario(fila, nota='') %}
+  {%- if fila.proximas or nota -%}
     <span class="calendario">
       {%- for j in fila.proximas -%}
         <span class="jornada {{ 'facil' if j.factor > 1.02 else 'dificil' if j.factor < 0.98 else 'medio' }}"
@@ -101,6 +101,7 @@
           {{- escudo(j.opponent_id) -}}
         </span>
       {%- endfor -%}
+      {%- if nota %}<span class="cambio">{{ nota }}</span>{% endif -%}
     </span>
   {%- endif -%}
 {% endmacro %}
@@ -110,6 +111,9 @@
      rendimiento  euros por semana (la sintesis)
      ventaja      lo que se aparta de su tramo de precio
      semanas      cuanto tarda un rival en amortizar su clausula
+     puntos       lo que se espera de el ESTA jornada, que es lo unico que
+                  cuenta al alinear: la revalorizacion la cobras igual desde
+                  el banquillo
    `coste` es el numero pequeno de la esquina: precio, clausula o lo que toque.
 #}
 {% macro tarjeta(fila, tipo='rendimiento', coste='market_value', sufijo='', vendedor=false) %}
@@ -121,6 +125,8 @@
       {{ fila.semanas_amortizacion|round|int }}<small>sem</small>
     {%- elif tipo == 'ventaja' -%}
       {{ euros(fila.euros_ventaja) }}
+    {%- elif tipo == 'puntos' -%}
+      {{ fila.puntos_jornada|points }}<small>pts</small>
     {%- else -%}
       {{ euros(fila.rendimiento_semanal, cero=true) }}<small>/sem</small>
     {%- endif -%}
@@ -134,6 +140,9 @@
       <span class="vende {{ 'sistema' if not fila.seller else 'rival' }}">
         {{- 'MISTER' if not fila.seller else fila.seller -}}</span>
     {%- endif -%}
+    {# Por que no juega, delante de todo: en el banquillo esa es la unica
+       pregunta, y al final de la linea se lo comian los puntos suspensivos. #}
+    {%- if fila.motivo -%}<span class="motivo">{{ fila.motivo }}</span>{%- endif -%}
     {{ contexto(fila) }}
   </span>
   <span class="cifras">
@@ -141,6 +150,55 @@
     {%- if tipo == 'rendimiento' and fila.xpts is not none %} · {{ fila.xpts|points }} pts{% endif -%}
   </span>
   {{ calendario(fila) }}
+</a>
+{% endmacro %}
+
+{# Un hueco del campo: la foto, el nombre y lo que se espera de el.
+
+   Mucho mas estrecho que una tarjeta a proposito. Un once son once nombres y
+   la forma en que se colocan ES el dato: puestos en lista se pierde de vista
+   que hay cuatro defensas y dos delanteros, que es justo lo que hay que
+   decidir. Los detalles de cada uno estan a un clic, en su ficha. #}
+{% macro hueco(fila) %}
+<a class="hueco{{ ' apagado' if not fila.puntos_jornada }}"
+   href="/jugador/{{ fila.id }}"
+   title="{{ fila.name }} · {{ (fila.team or '?')|upper }}{% if fila.probability is not none %} · {{ (fila.probability * 100)|round|int }}% de ser titular{% endif %}">
+  {{ foto(fila) }}
+  <span class="quien">{{ fila.name }}</span>
+  <span class="pts">{{ fila.puntos_jornada|points }}</span>
+  {%- if fila.motivo %}<span class="motivo">{{ fila.motivo }}</span>{% endif -%}
+</a>
+{% endmacro %}
+
+{# Un fichaje que mejoraria el once. La cifra que manda no es lo que rinde el
+   jugador sino lo que SUMA al once: fichar un delantero de seis puntos no
+   aporta nada si los tres que tienes ya hacen siete. #}
+{% macro fichaje(datos) %}
+  {%- set cambio = [] -%}
+  {%- if datos.desplaza -%}
+    {%- set _ = cambio.append('por ' ~ datos.desplaza|map(attribute='name')|join(' y ')) -%}
+  {%- endif -%}
+  {%- if datos.cambia_formacion -%}
+    {%- set _ = cambio.append('en ' ~ datos.formacion) -%}
+  {%- endif -%}
+<a class="card" href="/jugador/{{ datos.jugador.id }}">
+  {{ foto(datos.jugador) }}
+  <span class="nombre"><span class="pos">{{ datos.jugador.position or '?' }}</span>{{ datos.jugador.name }}</span>
+  {# Con la plantilla corta la cifra que importa no son los puntos -no hay once
+     al que sumarlos- sino que tapa uno de los huecos que impiden alinear. #}
+  <span class="principal sube">
+    {%- if datos.gana > 0 -%}+{{ datos.gana|points }}<small>pts</small>
+    {%- else -%}+{{ datos.tapa }}<small>hueco</small>{%- endif -%}
+  </span>
+  <span class="meta">
+    <span class="vende {{ 'sistema' if datos.tipo == 'mercado' }}">{{ datos.tipo|upper }}</span>
+    {{ contexto(datos.jugador) }}
+  </span>
+  <span class="cifras">
+    {{- datos.coste|moneyk }} €
+    {%- if datos.coste_por_punto %} · {{ datos.coste_por_punto|moneyk }} €/pt{% endif -%}
+  </span>
+  {{ calendario(datos.jugador, cambio|join(' · ')) }}
 </a>
 {% endmacro %}
 

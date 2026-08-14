@@ -23,6 +23,7 @@ def cliente(db, monkeypatch, tmp_path):
 def test_sin_capturar_lo_dice_en_vez_de_romperse(cliente):
     """Una base vacia no puede dar un 500: hay que decir que falta capturar."""
     assert cliente.get("/").status_code == 503
+    assert cliente.get("/once").status_code == 503
 
 
 def test_las_paginas_que_no_dependen_de_ti_responden(cliente):

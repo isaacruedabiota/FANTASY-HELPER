@@ -49,6 +49,7 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("manager", "avatar_url", "TEXT"),
     ("manager", "avatar_color", "TEXT"),
     ("manager", "avatar_initials", "TEXT"),
+    ("manager", "formation", "TEXT"),
 )
 
 

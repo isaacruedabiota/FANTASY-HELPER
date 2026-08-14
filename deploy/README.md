@@ -79,11 +79,16 @@ a hora hay que cambiar el esquema, no el intervalo.
 
 Y esas peticiones van con tu sesión de Mister. No se sabe dónde tienen el límite.
 
-## Al actualizar el código: reinicia los DOS servicios
+## Al actualizar el código: `fh init` y reinicia los DOS servicios
 
 ```bash
+.venv/bin/fh init                          # aplica columnas nuevas, si las hay
 sudo systemctl restart fantasyhelper@$USER fantasyhelper-web@$USER
 ```
+
+`fh init` es idempotente y hay que ejecutarlo siempre: las columnas nuevas se añaden
+ahí y no al conectar. Si el código espera una columna que la base no tiene, no falla
+una pantalla — fallan todas, porque `my_manager` la lee en cada petición.
 
 **Los dos, siempre.** El planificador es un proceso de días: importa el código al
 arrancar y no vuelve a mirarlo. Reiniciar solo la web deja la captura nocturna corriendo

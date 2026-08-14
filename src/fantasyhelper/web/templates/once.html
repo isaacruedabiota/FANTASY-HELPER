@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+
+{% block contenido %}
+{# La formacion manda sobre todo lo demas: si la que tienes puesta no es esta,
+   los once nombres no sirven de nada hasta que la cambies. #}
+<div class="tiles">
+  <div class="tile hero">
+    <span class="etiqueta">
+      Formación
+      {%- if me.formation and once.formacion != '–' %}
+        {%- if me.formation == once.formacion %} · ya la tienes puesta
+        {%- else %} · tienes {{ me.formation }}{% endif -%}
+      {%- endif -%}
+    </span>
+    <span class="cifra">{{ once.formacion }}</span>
+  </div>
+  <div class="tile">
+    <span class="etiqueta">Puntos del once</span>
+    <span class="cifra">{{ once.puntos|points }}</span>
+  </div>
+  <div class="tile">
+    <span class="etiqueta">Jornada</span>
+    <span class="cifra">{{ jornada if jornada else '–' }}</span>
+  </div>
+</div>
+
+<section>
+  <h2>A quién poner</h2>
+  <p class="sub">
+    Los once que más puntos esperan de entre tus {{ plantilla|length }},
+    probando las siete formaciones que admite Mister.
+  </p>
+
+  {% if once.titulares %}
+    <div class="campo">
+      {% for linea, jugadores in once.por_linea() %}
+        {% if jugadores %}
+          <div class="linea">
+            <span class="etiqueta-linea">{{ nombres_linea[linea] }}</span>
+            <div class="huecos">
+              {% for fila in jugadores %}{{ m.hueco(fila) }}{% endfor %}
+            </div>
+          </div>
+        {% endif %}
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {% if once.avisos %}
+    <p class="nota">
+      {% for aviso in once.avisos %}
+        <span class="estado">!</span> {{ aviso }}{% if not loop.last %}<br><br>{% endif %}
+      {% endfor %}
+    </p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>{{ 'Al banquillo' if once.completo else 'Tu plantilla' }}</h2>
+  <p class="sub">
+    {{ 'Y por qué se quedan fuera.' if once.completo
+       else 'Los que tienes, mientras no dé para un once.' }}
+  </p>
+  {{ m.lista(once.suplentes, tipo='puntos',
+             vacio='No te sobra nadie: tu plantilla es justo el once.') }}
+</section>
+
+<section>
+  <h2>Con tu dinero</h2>
+  <p class="sub">
+    {% if once.completo %}
+      Lo que puedes fichar hoy y <em>entraría</em> en el once
+    {% else %}
+      Lo que puedes fichar hoy y taparía uno de los huecos
+    {% endif %}
+    {%- if tope %}, sin pasar de {{ tope|moneyk }} €{% endif -%}.
+  </p>
+  {% if mejoras %}
+    <div class="lista">
+      {% for mejora in mejoras %}{{ m.fichaje(mejora) }}{% endfor %}
+    </div>
+  {% else %}
+    <p class="vacio">
+      Nada de lo que hay hoy en el mercado ni a tiro de cláusula te mejora el
+      once por lo que puedes pagar.
+    </p>
+  {% endif %}
+</section>
+
+<p class="nota">
+  <strong>Aquí no manda el dinero, mandan los puntos.</strong> En el resto de la
+  web la moneda común son los euros por semana, que suman puntos y
+  revalorización. Para alinear eso sería un error: un jugador
+  <em>se revaloriza igual desde el banquillo</em>, así que la revalorización no
+  depende de a quién pongas. Lo único que te juegas al alinear son los puntos de
+  la jornada.
+  <br><br>
+  <strong>Cada cifra es lo que se espera de ese jugador esta jornada</strong>: su
+  media, ajustada por el rival y por dónde se juega, y multiplicada por la
+  probabilidad de que sea titular. Un 40% de probabilidad ya viene descontado en
+  el número, pero eso no lo hace seguro — de ahí los avisos.
+  {% if jornada %}
+    <br><br>
+    <strong>Ojo con la jornada {{ jornada }}.</strong> No todos los equipos
+    juegan la misma: los que descansan por el Mundial tienen su próximo partido
+    en la siguiente, y alinearlos este fin de semana es un cero. Van marcados y
+    fuera del once.
+  {% endif %}
+  <br><br>
+  En <strong>Con tu dinero</strong>, <strong>+pts</strong> no es lo que rinde el
+  jugador sino lo que <em>le añade a tu once</em>: se rehace la alineación
+  entera con él dentro y se compara. Fichar un delantero de 6 puntos no aporta
+  nada si los tres que ya tienes hacen 7. Por eso también aparece con qué
+  formación entra y a quién deja en el banquillo.
+</p>
+{% endblock %}

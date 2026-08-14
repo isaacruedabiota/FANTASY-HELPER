@@ -25,7 +25,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from fantasyhelper import advice, display, market, queries, xpts
+from fantasyhelper import advice, display, lineup, market, queries, xpts
 from fantasyhelper.bonuses import load_rules
 from fantasyhelper.config import settings
 from fantasyhelper.storage.db import connect
@@ -65,18 +65,22 @@ def _ultima_captura(conn: sqlite3.Connection) -> str | None:
     return fila["t"] if fila else None
 
 
-def _pagina_con_estado(request: Request, plantilla: str, conn, **contexto):
+def _pagina_con_estado(request: Request, pagina: str, conn, **contexto):
     """Toda pagina lleva en la cabecera cuando se capturo por ultima vez.
 
     Y los mapas de fotos, porque cualquier lista de jugadores los necesita y
     pasarlos ruta por ruta era garantizar olvidarse en una.
+
+    El segundo parametro se llama `pagina` y no `plantilla` por una razon
+    practica: hay rutas que pasan una plantilla de futbol en el contexto, y con
+    ese nombre chocaba con el de la plantilla HTML.
     """
     contexto["ultima_captura"] = _ultima_captura(conn)
     contexto["captura"] = RUNNER.state().as_dict()
     jugadores, equipos = photo_ids(conn)
     contexto.setdefault("fotos_jugador", jugadores)
     contexto.setdefault("fotos_equipo", equipos)
-    return templates.TemplateResponse(request, plantilla, contexto)
+    return templates.TemplateResponse(request, pagina, contexto)
 
 
 def _conn() -> sqlite3.Connection:
@@ -92,6 +96,35 @@ def _me(conn: sqlite3.Connection):
     return me
 
 
+def _tope_de_gasto(
+    conn: sqlite3.Connection,
+    cartera,
+    *,
+    manager_id: int,
+    valor_plantilla: int | None = None,
+) -> int | None:
+    """Hasta donde se puede comprometer hoy. Una sola definicion para toda la web.
+
+    No es el saldo disponible: es el futuro -ya descontadas las pujas lanzadas-
+    mas el cuarto de plantilla que la liga deja deber. Coincide al euro con el
+    `maxDebt` que publica Mister, y por eso ese numero se usa tal cual cuando
+    esta: sumarle el saldo seria contarlo dos veces.
+
+    `valor_plantilla` se acepta ya calculado porque quien lo tiene a mano se
+    ahorra volver a leer la plantilla, y solo hace falta en el caso raro de que
+    Mister no publique `maxDebt`.
+    """
+    if cartera is None:
+        return None
+    if cartera["max_debt"]:
+        return cartera["max_debt"]
+    if valor_plantilla is None:
+        valor_plantilla = sum(
+            fila["market_value"] or 0 for fila in queries.squad(conn, manager_id)
+        )
+    return queries.spendable(
+        cartera["balance"], cartera["future_balance"], valor_plantilla
+    )
 
 
 
@@ -110,18 +143,9 @@ def inicio(request: Request):
         )
         valor_plantilla = sum(f["market_value"] or 0 for f in plantilla)
 
-        # El tope de gasto no es el saldo disponible: es el futuro -menos, si
-        # hay pujas en el aire- mas el cuarto de plantilla que la liga deja
-        # deber. Es exactamente el `maxDebt` que publica Mister, asi que se usa
-        # ese cuando esta y se calcula solo cuando no.
-        #
-        # Sumarle ademas el saldo futuro seria contarlo dos veces: `maxDebt` ya
-        # lo lleva dentro.
-        tope = None
-        if cartera is not None:
-            tope = cartera["max_debt"] or queries.spendable(
-                saldo, cartera["future_balance"], valor_plantilla
-            )
+        tope = _tope_de_gasto(
+            conn, cartera, manager_id=me["id"], valor_plantilla=valor_plantilla
+        )
 
         datos = advice.briefing(
             conn, manager_id=me["id"], budget=tope, limit=6,
@@ -137,6 +161,40 @@ def inicio(request: Request):
             valor_plantilla=valor_plantilla,
             jugadores=len(plantilla),
             datos=datos,
+        )
+    finally:
+        conn.close()
+
+
+@app.get("/once", response_class=HTMLResponse)
+def once(request: Request):
+    """A quien alinear esta jornada, y que fichaje mejoraria el once.
+
+    Es la unica pantalla que NO habla en euros por semana. Alinear no mueve la
+    revalorizacion -un jugador sube de valor igual desde el banquillo- asi que
+    lo unico que se decide aqui son los puntos de la jornada. El dinero vuelve
+    en la segunda mitad, que es otra pregunta: que se puede comprar hoy que
+    entre en ese once.
+    """
+    conn = _conn()
+    try:
+        me = _me(conn)
+        cartera = queries.my_wallet(conn)
+        puntos, valores = predictions(conn)
+        datos = lineup.recommend(
+            conn,
+            manager_id=me["id"],
+            budget=_tope_de_gasto(conn, cartera, manager_id=me["id"]),
+            model=momentum_model(conn),
+            points=puntos,
+            values=valores,
+        )
+        return _pagina_con_estado(
+            request, "once.html", conn,
+            titulo="El once",
+            me=me,
+            nombres_linea=lineup.LINE_NAMES,
+            **datos,
         )
     finally:
         conn.close()
@@ -339,6 +397,47 @@ def api_hoy():
                 for fila in datos[clave]
             ]
             for clave in ("comprar", "clausulas", "vender", "blindar")
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/api/once")
+def api_once():
+    """El once recomendado y las mejoras, sin plantilla. Para el bot que venga."""
+    conn = _conn()
+    try:
+        me = _me(conn)
+        puntos, valores = predictions(conn)
+        datos = lineup.recommend(
+            conn,
+            manager_id=me["id"],
+            budget=_tope_de_gasto(conn, queries.my_wallet(conn), manager_id=me["id"]),
+            model=momentum_model(conn),
+            points=puntos,
+            values=valores,
+        )
+        once = datos["once"]
+        return {
+            "jornada": datos["jornada"],
+            "formacion": once.formacion,
+            "puntos": once.puntos,
+            "avisos": once.avisos,
+            "titulares": [
+                {clave: fila[clave] for clave in ("id", "name", "position", "team")}
+                | {"puntos": fila["puntos_jornada"], "motivo": fila["motivo"]}
+                for fila in once.titulares
+            ],
+            "mejoras": [
+                {
+                    "jugador": mejora["jugador"]["name"],
+                    "tipo": mejora["tipo"],
+                    "coste": mejora["coste"],
+                    "gana": mejora["gana"],
+                    "desplaza": [f["name"] for f in mejora["desplaza"]],
+                }
+                for mejora in datos["mejoras"]
+            ],
         }
     finally:
         conn.close()

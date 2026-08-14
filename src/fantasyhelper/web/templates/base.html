@@ -1,5 +1,5 @@
 {# Esqueleto comun. La navegacion es una fila con scroll horizontal en vez de un
-   menu desplegable: con cinco secciones, un menu es un clic de mas para nada. #}
+   menu desplegable: con seis secciones, un menu es un clic de mas para nada. #}
 <!doctype html>
 <html lang="es">
 <head>
@@ -22,8 +22,8 @@
       </div>
     </div>
     <nav>
-      {% set rutas = [("/", "Hoy"), ("/plantilla", "Plantilla"), ("/mercado", "Mercado"),
-                      ("/valor", "Valor"), ("/liga", "Liga")] %}
+      {% set rutas = [("/", "Hoy"), ("/once", "Once"), ("/plantilla", "Plantilla"),
+                      ("/mercado", "Mercado"), ("/valor", "Valor"), ("/liga", "Liga")] %}
       {% for ruta, nombre in rutas %}
         <a href="{{ ruta }}" {% if request.url.path == ruta %}class="activo"{% endif %}>{{ nombre }}</a>
       {% endfor %}

@@ -161,6 +161,10 @@ CREATE TABLE IF NOT EXISTS manager (
     -- color con su inicial, y sin esto esa gente se quedaria sin nada.
     avatar_color TEXT,
     avatar_initials TEXT,
+    -- Formacion que tiene puesta ahora mismo ('4-4-2'). Solo se conoce la
+    -- propia: viene en `_FG_user`, que es la configuracion del usuario de la
+    -- sesion. Sirve para decir si hay que cambiarla, no solo a quien alinear.
+    formation    TEXT,
     UNIQUE (league_id, external_id)
 );
 

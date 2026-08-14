@@ -311,6 +311,85 @@ def plantilla(
 
 
 @app.command()
+def once(
+    saldo: int = typer.Option(None, help="Tope de gasto a considerar, en euros."),
+    limite: int = typer.Option(6, help="Cuantas mejoras mostrar."),
+) -> None:
+    """A quién alinear esta jornada, y qué fichaje mejoraría el once.
+
+    Aquí no manda el dinero sino los puntos: un jugador se revaloriza igual
+    desde el banquillo, así que lo único que se decide al alinear son los
+    puntos de la jornada. El saldo vuelve al final, para la otra pregunta.
+    """
+    from fantasyhelper import lineup
+
+    conn, me = _con_liga()
+    try:
+        if saldo is None:
+            cartera = queries.my_wallet(conn)
+            saldo = cartera["max_debt"] if cartera else None
+
+        datos = lineup.recommend(
+            conn, manager_id=me["id"], budget=saldo, limit=limite
+        )
+        alineacion = datos["once"]
+
+        cabecera = f"Jornada {datos['jornada'] or '?'}"
+        if alineacion.completo:
+            cabecera += f" · [bold]{alineacion.formacion}[/bold]"
+            if me["formation"] and me["formation"] != alineacion.formacion:
+                cabecera += f" (tienes puesto el {me['formation']})"
+            cabecera += f" · {display.points(alineacion.puntos)} puntos esperados"
+        console.print(f"\n{cabecera}\n")
+
+        def tabla(titulo: str, filas: list[dict]) -> None:
+            table = display.player_table(titulo, extra=("xPts jornada", "Motivo"))
+            for fila in filas:
+                table.add_row(*display.player_row(
+                    fila,
+                    display.points(fila["puntos_jornada"]),
+                    fila["motivo"] or "",
+                ))
+            console.print(table)
+
+        for linea, jugadores in alineacion.por_linea():
+            if jugadores:
+                tabla(lineup.LINE_NAMES[linea], jugadores)
+
+        # El banquillo tambien, y sobre todo cuando no hay once: con la
+        # plantilla corta esta es la unica tabla que sale, y sin ella el
+        # comando responde con un aviso y nada mas.
+        if alineacion.suplentes:
+            tabla(
+                "\nBanquillo" if alineacion.completo else "\nTu plantilla",
+                alineacion.suplentes,
+            )
+
+        for aviso in alineacion.avisos:
+            console.print(f"[yellow]![/yellow] {aviso}")
+
+        if datos["mejoras"]:
+            table = display.player_table(
+                "\nQue mejoraria el once"
+                + (f" con {display.money(saldo)} €" if saldo else ""),
+                extra=("Como", "Coste", "+xPts", "€/punto", "Deja fuera"),
+            )
+            for mejora in datos["mejoras"]:
+                table.add_row(*display.player_row(
+                    mejora["jugador"],
+                    mejora["tipo"],
+                    display.money(mejora["coste"], short=True),
+                    (f"+{display.points(mejora['gana'])}" if mejora["gana"] > 0
+                     else "tapa hueco"),
+                    display.money(mejora["coste_por_punto"], short=True),
+                    ", ".join(f["name"] for f in mejora["desplaza"]),
+                ))
+            console.print(table)
+    finally:
+        conn.close()
+
+
+@app.command()
 def mercado() -> None:
     """El mercado de hoy, ordenado por probabilidad de ser titular."""
     conn = connect()

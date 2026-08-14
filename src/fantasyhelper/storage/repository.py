@@ -433,6 +433,22 @@ def record_manager_avatar(
     )
 
 
+def record_manager_formation(
+    conn: sqlite3.Connection, *, manager_id: int, formation: str | None
+) -> None:
+    """La formacion que tiene puesta el participante ahora mismo.
+
+    Se pisa como el avatar y no se historifica: lo que interesa es si hay que
+    cambiarla hoy, no cuando dejo de jugar con tres delanteros. Solo se sabe la
+    propia, porque viene de la configuracion del usuario de la sesion.
+    """
+    if not formation:
+        return
+    conn.execute(
+        "UPDATE manager SET formation = ? WHERE id = ?", (formation, manager_id)
+    )
+
+
 def record_market_listing(
     conn: sqlite3.Connection,
     *,

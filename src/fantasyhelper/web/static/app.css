@@ -392,6 +392,107 @@ h2 {
 }
 .vende.sistema { border-color: var(--serie); color: var(--serie); }
 
+/* --- el once -------------------------------------------------------------- */
+
+/* Los once puestos en lineas y no en lista. La disposicion ES el dato: en una
+ * lista se pierde de vista que hay cuatro defensas y dos delanteros, que es
+ * justo lo que se esta decidiendo. Sin verde ni cesped: esto es una pantalla de
+ * datos, y el adorno solo restaria contraste al unico numero que importa. */
+.campo {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radio);
+  padding: 12px 8px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.linea + .linea { border-top: 1px solid var(--border); padding-top: 12px; }
+
+.etiqueta-linea {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+  padding-left: 4px;
+}
+
+.huecos {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+}
+
+/* Reparto a partes iguales con un tope: con un solo delantero, un hueco de
+ * ancho completo quedaria absurdo. `min-width: 0` para que el nombre pueda
+ * recortarse en vez de ensanchar la fila y sacarla del movil. */
+.hueco {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 84px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 2px;
+  border-radius: 8px;
+}
+.hueco:hover { background: var(--plane); }
+
+.hueco .quien {
+  font-size: 11px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+}
+
+.hueco .pts {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Quien no puntua esta jornada. La opacidad sola no vale -no se distingue de
+ * una foto oscura- asi que debajo lleva escrito el motivo. */
+.hueco.apagado { opacity: 0.5; }
+.hueco.apagado .pts { color: var(--muted); }
+
+.hueco .motivo { max-width: 100%; margin-right: 0; }
+
+/* Chip de por que un jugador no cuenta: 'no juega la J1', 'lesionado'. Usa el
+ * color de aviso, pero el texto dice el motivo por si el color no llega. */
+.motivo {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--aviso);
+  border: 1px solid var(--aviso);
+  background: var(--surface);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A quien deja en el banquillo un fichaje, al lado de su calendario. */
+.cambio {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
 /* --- participantes de la liga --------------------------------------------- */
 
 /* Fila con scroll y no rejilla: en una liga de diez caben tres o cuatro caras
