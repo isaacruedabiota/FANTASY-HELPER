@@ -26,6 +26,34 @@ log = logging.getLogger(__name__)
 
 JOB_NAME = "daily_snapshot"
 
+#: A partir de cuantos minutos se da por muerta una captura que consta como
+#: 'running'. Si el proceso muere a media captura su fila se queda ahi para
+#: siempre, y sin esto no volveria a capturarse nunca.
+STALE_MINUTES = 15
+
+
+def capture_running(conn: sqlite3.Connection) -> bool:
+    """Si hay una captura en marcha, la lance quien la lance.
+
+    Vive aqui y no en la web porque hay dos procesos distintos que capturan -el
+    planificador y el boton de la pagina- y ninguno de los dos puede depender
+    del otro: la web es un extra opcional del paquete.
+
+    Importa mas desde que se captura cada pocos minutos: antes las dos capturas
+    diarias y un clic ocasional casi nunca coincidian, y ahora la ventana de
+    solape es permanente.
+    """
+    fila = conn.execute(
+        """
+        SELECT started_at FROM job_run
+        WHERE job_name = ? AND status = 'running'
+          AND started_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)
+        ORDER BY started_at DESC LIMIT 1
+        """,
+        (JOB_NAME, f"-{STALE_MINUTES} minutes"),
+    ).fetchone()
+    return fila is not None
+
 
 def current_matchday(conn: sqlite3.Connection) -> int:
     """Jornada en curso. Se deduce de los partidos ya cargados; 1 si no hay nada."""

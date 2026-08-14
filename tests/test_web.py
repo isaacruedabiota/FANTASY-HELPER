@@ -161,11 +161,12 @@ def test_no_se_lanzan_dos_capturas_a_la_vez():
 
 def test_no_se_pisa_a_la_captura_programada(db, monkeypatch, tmp_path):
     """El planificador corre en OTRO proceso; el candado va en la base de datos."""
+    from fantasyhelper.jobs.snapshot import JOB_NAME
     from fantasyhelper.storage import db as db_module
     from fantasyhelper.storage import repository as repo
     from fantasyhelper.web import tasks
 
-    repo.start_job(db, tasks.JOB_NAME)  # queda en 'running'
+    repo.start_job(db, JOB_NAME)  # queda en 'running'
     monkeypatch.setattr(tasks, "connect", lambda: db_module.connect(tmp_path / "test.db"))
 
     arrancada, motivo = tasks.CaptureRunner().start()

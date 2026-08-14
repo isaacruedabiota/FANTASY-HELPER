@@ -59,6 +59,26 @@ El planificador captura a las 03:30 (cuando Mister ya ha actualizado los valores
 Pi estuvo apagada a esa hora, el trabajo se ejecuta igualmente al arrancar dentro de un
 margen de 6 horas, así que no se pierde el día.
 
+### Capturar más a menudo
+
+`FH_CAPTURE_EVERY_MINUTES=30` en `.env` cambia a una captura cada media hora, que
+**sustituye** a las dos diarias. Reinicia el planificador después de tocarlo.
+
+Merece la pena saber qué se compra y qué se paga:
+
+|  | Dos diarias | Cada 30 min |
+|---|---|---|
+| Peticiones/día | ~65 | ~2.100 |
+| Antigüedad del dato | hasta 10 h | hasta 30 min |
+| Puntos de histórico/día | 1 | **1** |
+
+La última fila es la que sorprende. Los snapshots son una fila por día y entidad —así
+está la clave única en `schema.sql`—, de modo que capturar 48 veces reescribe 48 veces
+las mismas filas. Se gana frescura, no resolución: para tener el valor de un jugador hora
+a hora hay que cambiar el esquema, no el intervalo.
+
+Y esas peticiones van con tu sesión de Mister. No se sabe dónde tienen el límite.
+
 ## Al actualizar el código: reinicia los DOS servicios
 
 ```bash

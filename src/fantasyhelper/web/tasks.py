@@ -21,20 +21,26 @@ simultaneas se pisarian escribiendo el mismo snapshot del dia.
 from __future__ import annotations
 
 import logging
-import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
 
-from fantasyhelper.jobs.snapshot import JOB_NAME, run_snapshot
+from fantasyhelper.jobs.snapshot import (
+    STALE_MINUTES,
+    capture_running,
+    run_snapshot,
+)
 from fantasyhelper.storage.db import connect
 
 log = logging.getLogger(__name__)
 
-#: A partir de cuantos minutos se da por muerta una captura que consta como
-#: 'running'. Si el servicio muere a media captura, su fila se queda ahi para
-#: siempre y sin esto el boton no volveria a funcionar nunca.
-STALE_MINUTES = 15
+#: El candado de la base de datos vive en `jobs.snapshot` porque lo necesitan
+#: los dos procesos que capturan, y el planificador no puede importar de la web:
+#: la web es un extra opcional del paquete.
+other_capture_running = capture_running
+
+__all__ = ["RUNNER", "STALE_MINUTES", "CaptureRunner", "CaptureState",
+           "other_capture_running"]
 
 
 @dataclass
@@ -57,20 +63,6 @@ class CaptureState:
                 round(time.time() - self.finished_at) if self.finished_at else None
             ),
         }
-
-
-def other_capture_running(conn: sqlite3.Connection) -> bool:
-    """Si la captura programada esta corriendo ahora mismo en el otro proceso."""
-    fila = conn.execute(
-        """
-        SELECT started_at FROM job_run
-        WHERE job_name = ? AND status = 'running'
-          AND started_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)
-        ORDER BY started_at DESC LIMIT 1
-        """,
-        (JOB_NAME, f"-{STALE_MINUTES} minutes"),
-    ).fetchone()
-    return fila is not None
 
 
 class CaptureRunner:
