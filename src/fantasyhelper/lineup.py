@@ -273,6 +273,13 @@ def for_matchday(
         fila["puntos_jornada"] = puntos
         fila["rival_jornada"] = plan["opponent"] if plan else None
         fila["motivo"] = motivo
+
+        # El rival que se ensena tiene que ser el de ESTA jornada. Sin esto, a
+        # un aplazado se le pintaba el rival de su proximo partido con fecha
+        # -Endrick contra el Espanyol- cuando el de la jornada es otro.
+        if plan is not None and plan["opponent"]:
+            fila["opponent"] = plan["opponent"]
+            fila["is_home"] = plan["is_home"]
     return rows
 
 

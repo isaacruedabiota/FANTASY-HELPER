@@ -81,10 +81,13 @@
 {% macro contexto(fila) %}
   {{ (fila.team or '?')|upper }} · {{ rival(fila) }}
   {%- if fila.probability is not none %} · {{ (fila.probability * 100)|round|int }}%{% endif -%}
-  {# El estado solo cuando no hay `motivo`: en las pantallas que lo calculan,
-     ese ya dice lo mismo y mejor, y repetirlo llenaba la linea de ruido. #}
-  {%- if fila.status and fila.status != 'ok' and not fila.motivo %}
-    <span class="estado">{{ fila.status|replace('_', ' ') }}</span>
+  {# El estado, salvo que el `motivo` ya lo diga: repetirlo llenaba la linea de
+     ruido. Pero solo si lo dice: un jugador puede volver de lesion Y no tener
+     historial, y con el motivo mandando sin mas se perdia lo primero, que es
+     justo lo que hay que mirar. #}
+  {%- set estado = (fila.status or '')|replace('_', ' ') -%}
+  {%- if estado and estado != 'ok' and estado not in (fila.motivo or '') %}
+    <span class="estado">{{ estado }}</span>
   {%- endif -%}
 {% endmacro %}
 
@@ -164,7 +167,7 @@
 {% macro hueco(fila) %}
 <a class="hueco{{ ' apagado' if not fila.puntos_jornada }}"
    href="/jugador/{{ fila.id }}"
-   title="{{ fila.name }} · {{ (fila.team or '?')|upper }}{% if fila.probability is not none %} · {{ (fila.probability * 100)|round|int }}% de ser titular{% endif %}">
+   title="{{ fila.name }} · {{ (fila.team or '?')|upper }}{% if fila.rival_jornada %} · contra {{ fila.rival_jornada|upper }}{% endif %}{% if fila.probability is not none %} · {{ (fila.probability * 100)|round|int }}% de ser titular{% endif %}{% if fila.status and fila.status != 'ok' %} · {{ fila.status|replace('_', ' ') }}{% endif %}">
   {{ foto(fila) }}
   <span class="quien">{{ fila.name }}</span>
   <span class="pts">{{ fila.puntos_jornada|points }}</span>

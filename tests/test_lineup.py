@@ -270,6 +270,15 @@ def test_se_avisa_de_quien_vuelve_de_lesion():
     assert "Vuelve" in avisos
 
 
+def test_el_rival_que_se_ensena_es_el_de_la_jornada():
+    """A un aplazado se le pintaba el rival de su proximo partido con fecha."""
+    fila = jugador("Aplazado", "DL", 3.0, opponent="Espanyol", is_home=False)
+    lineup.for_matchday([fila], 1, outlook={EQUIPO: plan(aplazado=True)})
+
+    assert fila["rival_jornada"] == "Rival"
+    assert fila["opponent"] == "Rival", "el de la jornada, no el del proximo"
+
+
 def test_se_avisa_del_partido_aplazado():
     filas = plantilla(4, 4, 1)
     filas.append(jugador("Aplazado", "DL", 3.0, team_id=9))
