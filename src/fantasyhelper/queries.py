@@ -20,7 +20,22 @@ UNKNOWN_PROBABILITY = 0.2
 
 #: Estados que descartan a un jugador como objetivo: nadie paga una clausula
 #: por alguien que no puede jugar.
+#:
+#: `lesionado` es aqui la lesion ROJA de FutbolFantasy, la de "baja hasta
+#: diciembre". Las otras dos -naranja y verde- no entran: esa gente juega, y
+#: tratarlas como bajas dejaba fuera del once y del radar a jugadores
+#: disponibles. Ver `INJURY_STATUS` en el scraper.
 UNAVAILABLE = ("lesionado", "sancionado", "no_disponible")
+
+#: Vuelve de una lesion: juega, pero acaba de volver.
+#:
+#:   tocado     naranja, "duda para la jornada"
+#:   de_vuelta  verde, "disponible para la jornada"
+#:
+#: No son bajas y no valen cero. Lo que si tienen es un riesgo que ninguna otra
+#: cifra recoge: recaen, y cuando juegan suelen hacerlo menos minutos de los
+#: suyos. De ahi `RETURNING_MINUTES` en `xpts`.
+RETURNING = ("tocado", "de_vuelta")
 
 #: Dias hacia atras que mira `latest_value` para dar con el ultimo valor.
 #:

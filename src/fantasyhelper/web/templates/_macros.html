@@ -81,7 +81,9 @@
 {% macro contexto(fila) %}
   {{ (fila.team or '?')|upper }} · {{ rival(fila) }}
   {%- if fila.probability is not none %} · {{ (fila.probability * 100)|round|int }}%{% endif -%}
-  {%- if fila.status and fila.status != 'ok' %}
+  {# El estado solo cuando no hay `motivo`: en las pantallas que lo calculan,
+     ese ya dice lo mismo y mejor, y repetirlo llenaba la linea de ruido. #}
+  {%- if fila.status and fila.status != 'ok' and not fila.motivo %}
     <span class="estado">{{ fila.status|replace('_', ' ') }}</span>
   {%- endif -%}
 {% endmacro %}

@@ -130,6 +130,25 @@ def _set_piece(value: str | None) -> int | None:
     return number
 
 
+#: `data-lesion` no es un si/no: es la GRAVEDAD, y coincide al detalle con la
+#: clase `gravedad-N` con la que FutbolFantasy pinta el semaforo de su bloque
+#: "Estado fisico de la plantilla". Verificado cruzando las dos cosas jugador a
+#: jugador en la pagina de equipo:
+#:
+#:   -1  sano, sin parte medico
+#:    0  rojo    "Baja hasta diciembre"        rotura de cruzado, de menisco
+#:    1  naranja "Duda para la jornada"        se esta recuperando
+#:    2  verde   "Disponible para la jornada"  vuelve, pero acaba de volver
+#:
+#: Esto estuvo AL REVES y era grave: la condicion era `lesion > 0`, asi que el
+#: rojo -el unico que de verdad no juega- se colaba como sano, y el verde -que
+#: si juega- se descartaba como baja.
+#:
+#: Los nombres se eligen para que se lean solos en una etiqueta de movil, sin
+#: tabla de traduccion por medio.
+INJURY_STATUS = {0: "lesionado", 1: "tocado", 2: "de_vuelta"}
+
+
 def _status(attrs: dict[str, str], probability: float | None) -> str:
     """Estado del jugador, de mas grave a menos.
 
@@ -139,8 +158,8 @@ def _status(attrs: dict[str, str], probability: float | None) -> str:
     if _int(attrs.get("data-sancionado")):
         return "sancionado"
     lesion = _int(attrs.get("data-lesion"))
-    if lesion is not None and lesion > 0:
-        return "lesionado"
+    if lesion in INJURY_STATUS:
+        return INJURY_STATUS[lesion]
     if _int(attrs.get("data-nodisponible")):
         return "no_disponible"
     if _int(attrs.get("data-vacaciones")) or _int(attrs.get("data-internacional")):

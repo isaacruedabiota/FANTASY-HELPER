@@ -102,11 +102,26 @@
   el número, pero eso no lo hace seguro — de ahí los avisos.
   {% if jornada %}
     <br><br>
-    <strong>Ojo con la jornada {{ jornada }}.</strong> No todos los equipos
-    juegan la misma: los que descansan por el Mundial tienen su próximo partido
-    en la siguiente, y alinearlos este fin de semana es un cero. Van marcados y
-    fuera del once.
+    <strong>«Juega más tarde» no es «no juega».</strong> En la jornada
+    {{ jornada }} hay partidos <em>aplazados</em> — los seis clubes con gente en
+    el Mundial. Tienen rival asignado y la juegan igual, sólo que sin fecha
+    todavía: <strong>puntúan en esta jornada</strong> y por eso siguen entrando
+    en el once.
+    <br><br>
+    Lo que llevan es un descuento del {{ descuentos.aplazado }}%, y no por
+    el rival: la
+    alineación probable que tenemos hoy no describe un once de dentro de tres
+    semanas, y de aquí a entonces un jugador se puede lesionar, perder el sitio
+    o cambiar de equipo. Sin partido asignado en la jornada, eso sí, no se
+    espera nada.
   {% endif %}
+  <br><br>
+  <strong>Las lesiones tienen tres niveles</strong>, como en FutbolFantasy.
+  <em>Lesionado</em> es baja y vale cero. <em>Tocado</em> se está recuperando y
+  es duda. <em>De vuelta</em> ya está disponible — juega, pero acaba de volver,
+  así que puede recaer y le suelen dar menos minutos: por eso va con un
+  {{ descuentos.minutos }}% menos, aparte de su probabilidad de ser titular,
+  que es otra cosa.
   <br><br>
   En <strong>Con tu dinero</strong>, <strong>+pts</strong> no es lo que rinde el
   jugador sino lo que <em>le añade a tu once</em>: se rehace la alineación

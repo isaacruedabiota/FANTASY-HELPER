@@ -16,10 +16,15 @@ SPARK_CHARS = "▁▂▃▄▅▆▇█"
 #: Colores por probabilidad de ser titular.
 PROB_COLORS = ((0.8, "green"), (0.6, "yellow"), (0.0, "red"))
 
+#: Rojo para el que no juega, amarillo para el que juega con reservas. Los tres
+#: niveles de lesion de FutbolFantasy van separados porque solo el primero es
+#: una baja; los otros dos juegan.
 STATUS_LABELS = {
     "ok": "",
     "duda": "[yellow]duda[/yellow]",
     "lesionado": "[red]lesion[/red]",
+    "tocado": "[yellow]tocado[/yellow]",
+    "de_vuelta": "[yellow]vuelve[/yellow]",
     "sancionado": "[red]sancion[/red]",
     "no_disponible": "[red]no disp.[/red]",
     "ausente": "[yellow]ausente[/yellow]",

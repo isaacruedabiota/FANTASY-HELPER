@@ -198,6 +198,13 @@ def once(request: Request):
             # cuando ya era la puesta.
             formacion_actual=lineup.normalize_formation(me["formation"]),
             nombres_linea=lineup.LINE_NAMES,
+            # Los dos descuentos del modelo, ya en porcentaje: la nota los
+            # escribe, y una nota que no cuadre con el codigo es peor que no
+            # tener nota.
+            descuentos={
+                "aplazado": round((1 - lineup.POSTPONED_DISCOUNT) * 100),
+                "minutos": round((1 - xpts.RETURNING_MINUTES) * 100),
+            },
             **datos,
         )
     finally:

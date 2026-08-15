@@ -537,6 +537,11 @@ def playing_probability(row: dict) -> float:
     sea improbable que juegue, es que no puede. Y de quien no sabemos nada se
     supone poco, porque no tener noticias de un jugador suele significar que no
     es titular.
+
+    Ojo con lo que cuenta como lesionado: solo la baja de verdad -la roja de
+    FutbolFantasy-. El que se esta recuperando o acaba de volver SI juega, y su
+    probabilidad ya viene rebajada en la fuente; ponerle un cero era descartar a
+    gente disponible.
     """
     from fantasyhelper.queries import UNAVAILABLE, UNKNOWN_PROBABILITY
 
@@ -544,6 +549,24 @@ def playing_probability(row: dict) -> float:
         return 0.0
     probabilidad = row.get("probability")
     return UNKNOWN_PROBABILITY if probabilidad is None else float(probabilidad)
+
+
+#: Lo que rinde un jugador que vuelve de lesion respecto a lo suyo.
+#:
+#: La probabilidad de la fuente responde a "sera titular", que es otra pregunta:
+#: aunque salga de inicio, el que acaba de reaparecer juega media hora y se va.
+#: Son dos descuentos distintos y por eso se multiplican en vez de solaparse.
+#:
+#: Es un prior, no una medicion: no tenemos minutos jugados por jugador. Se
+#: queda en el lado prudente -un 15%- y se revisara cuando haya con que.
+RETURNING_MINUTES = 0.85
+
+
+def minutes_factor(row: dict) -> float:
+    """Descuento por volver de lesion. 1.0 para todos los demas."""
+    from fantasyhelper.queries import RETURNING
+
+    return RETURNING_MINUTES if (row.get("status") or "") in RETURNING else 1.0
 
 
 def attach(
@@ -570,10 +593,11 @@ def attach(
         datos = dict(fila)
         prediccion = modelo.get(datos["id"])
         probabilidad = playing_probability(datos)
+        minutos = minutes_factor(datos)
 
         xpts = None
         if prediccion is not None:
-            xpts = prediccion["xpts_si_juega"] * probabilidad
+            xpts = prediccion["xpts_si_juega"] * probabilidad * minutos
             # `matchday` es la jornada del PROXIMO partido de su equipo, que no
             # tiene por que ser la que se juega ahora: quien descansa por el
             # Mundial la tiene una mas alta. Alinear mira esa diferencia.
@@ -589,6 +613,7 @@ def attach(
                 prediccion["media_base"]
                 * prediccion["ajuste_calendario"]
                 * probabilidad
+                * minutos
             )
             # El rival del modelo sale del calendario propio y es mas fiable que
             # el que traiga la fila, pero solo se pisa si de verdad lo sabemos.

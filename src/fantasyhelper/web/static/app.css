@@ -465,6 +465,11 @@ h2 {
 
 .hueco .motivo { max-width: 100%; margin-right: 0; }
 
+/* En el hueco apagado el motivo pasa a rojo: ahi el jugador NO puntua, y no es
+ * lo mismo que "juega mas tarde" o "vuelve de lesion", que si. El texto dice
+ * cual es en los dos casos; el color solo lo refuerza. */
+.hueco.apagado .motivo { color: var(--baja); border-color: var(--baja); }
+
 /* Chip de por que un jugador no cuenta: 'no juega la J1', 'lesionado'. Usa el
  * color de aviso, pero el texto dice el motivo por si el color no llega. */
 .motivo {

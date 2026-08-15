@@ -17,13 +17,22 @@ Lo unico que se juega al alinear son los PUNTOS de la jornada. Por eso aqui la
 unidad es xPts y no euros, y por eso un jugador que se esta revalorizando puede
 merecer sitio en el mercado y no en el once.
 
-LA JORNADA, NO LA SEMANA QUE VIENE
+LA JORNADA, NO EL PROXIMO PARTIDO
 
-xPts se calcula contra el proximo partido de cada equipo, que no es el mismo
-para todos: con el Mundial hay seis equipos que descansan la primera jornada.
-Sus jugadores tienen xPts -del partido de la jornada 2- y alinearlos este fin de
-semana da cero. `for_matchday` es quien lo corrige, y es la diferencia entre una
-recomendacion util y una que te sienta a media plantilla.
+xPts se calcula contra el proximo partido CON FECHA de cada equipo, y esa no es
+siempre la jornada que toca. En la primera de esta temporada hay tres partidos
+aplazados -Athletic-Barcelona, Betis-Valencia y Madrid-Real Sociedad- porque
+esos seis clubes tienen gente en el Mundial.
+
+Aplazado no es descansar. Los veinte equipos tienen rival asignado en la J1 y
+esos seis la juegan igual, solo que mas tarde y sin fecha todavia. Sus jugadores
+PUNTUAN en la jornada, asi que sentarlos era tan equivocado como alinear a
+alguien que no juega. Lo que si merecen es un descuento, porque de aqui a que se
+dispute el partido puede pasar cualquier cosa y porque la alineacion probable
+que tenemos hoy no describe un once de dentro de tres semanas.
+
+`matchday_outlook` separa los tres casos -juega, juega aplazado, no juega- y
+`for_matchday` los convierte en puntos.
 
 EL DINERO SI CUENTA PARA LA OTRA MITAD
 
@@ -41,6 +50,7 @@ from dataclasses import dataclass, field
 
 from fantasyhelper import advice, market, queries, xpts
 from fantasyhelper.bonuses import BonusRules
+from fantasyhelper.config import settings
 
 #: Las formaciones que admite Mister: portero fijo y diez de campo, con entre
 #: tres y cinco defensas, entre tres y cinco medios y entre uno y tres
@@ -59,6 +69,21 @@ LINE_NAMES = {"PT": "Portería", "DF": "Defensa", "MC": "Medio", "DL": "Delanter
 #: el modelo ya ha descontado la probabilidad, y aun asi un 40% es una moneda al
 #: aire y eso no se ve en la cifra final.
 RISKY_PROBABILITY = 0.5
+
+#: Lo que vale un jugador cuyo partido de la jornada esta aplazado y sin fecha.
+#:
+#: Puntua igual que los demas cuando se juegue, asi que no es un cero. Pero se
+#: descuenta por dos motivos, y ninguno es el rival:
+#:
+#:   - la alineacion probable que tenemos es de esta semana y el partido puede
+#:     ser dentro de tres. No describe ese once.
+#:   - de aqui a entonces se puede lesionar, perder el sitio o cambiar de
+#:     equipo. Nada de eso se ve en su media.
+#:
+#: Es un prior deliberadamente suave, del mismo orden que los demas del modelo.
+#: Alinear a un aplazado bueno sigue siendo mejor que a un titular mediocre, que
+#: es justo lo que tiene que salir.
+POSTPONED_DISCOUNT = 0.85
 
 
 @dataclass
@@ -111,10 +136,14 @@ def position_baseline(predictions: dict[int, dict]) -> dict[str, float]:
 
     Mediana y no media: los delanteros estrella tiran de la media hacia arriba y
     la referencia dejaria de describir al jugador tipico.
+
+    Se toma la media BASE y no `xpts_si_juega`, que ya lleva dentro el ajuste
+    del rival de ese jugador. Quien llama vuelve a aplicar el ajuste de la
+    jornada, y con la otra cifra lo estaria contando dos veces.
     """
     por_puesto: dict[str, list[float]] = {}
     for datos in predictions.values():
-        posicion, esperado = datos.get("position"), datos.get("xpts_si_juega")
+        posicion, esperado = datos.get("position"), datos.get("media_base")
         if posicion and esperado is not None:
             por_puesto.setdefault(posicion, []).append(esperado)
 
@@ -125,46 +154,124 @@ def position_baseline(predictions: dict[int, dict]) -> dict[str, float]:
     }
 
 
+def matchday_outlook(
+    conn: sqlite3.Connection, jornada: int | None
+) -> dict[int, dict]:
+    """Como le pinta la jornada a cada equipo: {team_id: rival, factor, aplazado}.
+
+    Hay que mirar las dos tablas y no una:
+
+      `fixture`        los partidos CON FECHA. Trae la sede, que es un dato.
+      `team_schedule`  la rejilla entera que publica Mister, con rival asignado
+                       en las 38 jornadas aunque el partido no tenga dia.
+
+    Un equipo que aparece en `team_schedule` para esta jornada pero no en
+    `fixture` no descansa: tiene el partido aplazado. Es exactamente el caso de
+    los seis clubes con jugadores en el Mundial, y confundirlo con un descanso
+    sentaba a media plantilla sin motivo.
+
+    Quien no salga en el diccionario es que no juega la jornada, y de ese si es
+    correcto no esperar nada.
+    """
+    if jornada is None:
+        return {}
+
+    fuerza = xpts.team_strength(conn)
+    proximos = xpts.next_fixtures(conn)
+
+    plan: dict[int, dict] = {}
+    for fila in conn.execute(
+        """
+        SELECT s.team_id, s.opponent_id, s.is_home, t.name AS opponent
+        FROM team_schedule s
+        LEFT JOIN team t ON t.id = s.opponent_id
+        WHERE s.season = ? AND s.matchday = ?
+        """,
+        (settings.season, jornada),
+    ):
+        # Cuando el partido de la jornada SI tiene fecha, manda esa fila: sabe
+        # la sede y la rejilla no siempre. Cuando no, se usa la rejilla y el
+        # partido queda marcado como aplazado.
+        con_fecha = proximos.get(fila["team_id"])
+        aplazado = con_fecha is None or con_fecha["matchday"] > jornada
+        origen = fila if aplazado else con_fecha
+
+        factor = xpts.opponent_factor(fuerza, origen["opponent_id"])
+        if origen["is_home"] is not None:
+            factor *= xpts.HOME_ADVANTAGE if origen["is_home"] else xpts.AWAY_PENALTY
+
+        plan[fila["team_id"]] = {
+            "opponent": origen["opponent"],
+            "opponent_id": origen["opponent_id"],
+            "is_home": origen["is_home"],
+            "factor": factor,
+            "aplazado": aplazado,
+        }
+
+    return plan
+
+
 def for_matchday(
     rows: list[dict],
     jornada: int | None,
     *,
     baseline: dict[str, float] | None = None,
+    outlook: dict[int, dict] | None = None,
 ) -> list[dict]:
     """Anade a cada fila lo que se espera de ella EN ESTA JORNADA.
 
-    `xpts` responde a "cuanto hara en su proximo partido", que no es la misma
-    pregunta. Un jugador del Athletic cuyo equipo descansa la primera jornada
-    tiene 4,1 xPts y este domingo hace cero. Aqui se separan los dos casos y se
-    escribe el motivo, porque un cero sin explicacion parece un fallo.
+    `xpts` responde a "cuanto hara en su proximo partido con fecha", que no es
+    la misma pregunta. Con tres partidos aplazados en la J1, a seis equipos les
+    calcula el rival de la J2. Aqui se rehace la cuenta contra el rival de la
+    jornada de verdad y se escribe el motivo, porque una cifra rara sin
+    explicacion parece un fallo.
 
     Se escribe en las propias filas, como hace `advice.weekly_euros`: son dicts
     que ya viajan enriquecidos por media web.
     """
     referencia = baseline or {}
+    plan_por_equipo = outlook or {}
+
     for fila in rows:
         motivo = None
-        puntos = fila.get("xpts")
+        media = fila.get("media_base")
+        fila["sin_datos"] = media is None
+        if media is None:
+            # Ni historico ni temporada en curso. Se le da la media tipica de su
+            # puesto: no es adivinar lo que hara, es decir que no sabemos nada
+            # de el y por tanto se parece a uno cualquiera de su posicion.
+            media, motivo = referencia.get(fila.get("position")) or 0.0, "sin datos"
 
-        if puntos is None:
-            # Ni historico ni temporada en curso. Se le da la referencia de su
-            # puesto, descontada por lo probable que sea que juegue.
-            tipico = referencia.get(fila.get("position"))
-            puntos = (tipico or 0.0) * xpts.playing_probability(fila)
-            motivo = "sin datos"
-            fila["sin_datos"] = True
+        # Las dos rebajas que no dependen del rival: lo probable que sea que
+        # juegue y, si vuelve de lesion, los minutos que le van a dar.
+        descuento = xpts.playing_probability(fila) * xpts.minutes_factor(fila)
+        plan = plan_por_equipo.get(fila.get("team_id"))
+        fila["aplazado"] = bool(plan and plan["aplazado"])
 
-        # La jornada manda sobre todo lo demas: si su equipo no juega esta, da
-        # igual lo bueno que sea.
-        propia = fila.get("matchday")
-        if jornada is not None and propia is not None and propia > jornada:
+        if plan is not None:
+            # El rival de LA JORNADA, que con partidos aplazados no es el mismo
+            # que el del proximo partido con fecha.
+            puntos = media * plan["factor"] * descuento
+            if plan["aplazado"]:
+                puntos *= POSTPONED_DISCOUNT
+                motivo = motivo or "juega más tarde"
+        elif plan_por_equipo and jornada is not None:
             puntos, motivo = 0.0, f"no juega la J{jornada}"
+        else:
+            # Sin rejilla de calendario no hay forma de saber quien juega, y
+            # callarse es mejor que sentar a la plantilla entera. Se usa lo que
+            # ya calculo xpts contra su proximo partido.
+            calculado = fila.get("xpts")
+            puntos = calculado if calculado is not None else media * descuento
 
         estado = fila.get("status")
-        if estado and estado in queries.UNAVAILABLE:
+        if estado in queries.UNAVAILABLE:
+            puntos, motivo = 0.0, estado.replace("_", " ")
+        elif estado in queries.RETURNING and not motivo:
             motivo = estado.replace("_", " ")
 
         fila["puntos_jornada"] = puntos
+        fila["rival_jornada"] = plan["opponent"] if plan else None
         fila["motivo"] = motivo
     return rows
 
@@ -291,6 +398,27 @@ def _avisos(once: Once) -> list[str]:
     # (Filtrar ademas por `motivo` dejaba mudo el aviso de "sin datos", porque
     # ese motivo es precisamente el suyo.)
     juegan = [f for f in once.titulares if _puntos(f) > 0]
+
+    aplazados = [f for f in juegan if f.get("aplazado")]
+    if aplazados:
+        nombres = ", ".join(f["name"] for f in aplazados)
+        avisos.append(
+            "Su partido de esta jornada está aplazado y todavía sin fecha. "
+            f"Puntúan igual, pero más tarde, así que van con un "
+            f"{1 - POSTPONED_DISCOUNT:.0%} menos: {nombres}."
+        )
+
+    volviendo = [f for f in juegan if (f.get("status") or "") in queries.RETURNING]
+    if volviendo:
+        nombres = ", ".join(
+            f"{f['name']} ({(f.get('status') or '').replace('_', ' ')})"
+            for f in volviendo
+        )
+        avisos.append(
+            "Vuelven de lesión: juegan, pero suelen hacerlo menos minutos y "
+            f"pueden recaer, así que van con un {1 - xpts.RETURNING_MINUTES:.0%} "
+            f"menos: {nombres}."
+        )
 
     dudosos = [
         f for f in juegan
@@ -442,12 +570,15 @@ def recommend(
     valores = values if values is not None else market.forecast(conn, model=model)
     jornada = xpts.current_matchday(conn)
     referencia = position_baseline(puntos)
+    plan = matchday_outlook(conn, jornada)
 
     def preparar(filas: list) -> list[dict]:
         enriquecidas = advice.weekly_euros(
             conn, filas, rules=rules, model=model, points=puntos, values=valores
         )
-        return for_matchday(enriquecidas, jornada, baseline=referencia)
+        return for_matchday(
+            enriquecidas, jornada, baseline=referencia, outlook=plan
+        )
 
     plantilla = preparar(queries.squad(conn, manager_id))
     once = best_xi(plantilla)

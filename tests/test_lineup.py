@@ -33,15 +33,27 @@ def jugador(nombre: str, posicion: str, puntos: float | None, **extra) -> dict:
         "id": next(_ids),
         "name": nombre,
         "position": posicion,
+        "team_id": EQUIPO,
+        "media_base": puntos,
         "xpts": puntos,
         "puntos_jornada": puntos,
         "matchday": 1,
         "market_value": 1_000_000,
-        "probability": 0.9,
+        "probability": 1.0,
         "status": "ok",
     }
     fila.update(extra)
     return fila
+
+
+#: Equipo por defecto de las filas de prueba, para poder darle un plan.
+EQUIPO = 1
+
+
+def plan(*, factor: float = 1.0, aplazado: bool = False) -> dict:
+    """Lo que devuelve `matchday_outlook` para un equipo."""
+    return {"opponent": "Rival", "opponent_id": None, "is_home": None,
+            "factor": factor, "aplazado": aplazado}
 
 
 def plantilla(defensas=4, medios=4, delanteros=3, porteros=1) -> list[dict]:
@@ -135,13 +147,11 @@ def test_a_igualdad_de_puntos_juega_el_mas_caro():
 # --- la jornada, que no es la misma para todos ------------------------------
 
 
-def test_el_que_descansa_la_jornada_no_puntua():
-    """Seis equipos no juegan la J1 por el Mundial y sus xPts son de la J2."""
-    filas = [
-        {"id": 1, "name": "Descansa", "position": "DL", "xpts": 9.0, "matchday": 2},
-        {"id": 2, "name": "Juega", "position": "DL", "xpts": 3.0, "matchday": 1},
-    ]
-    lineup.for_matchday(filas, 1)
+def test_el_que_no_tiene_rival_en_la_jornada_no_puntua():
+    """Sin rival asignado en la jornada no hay partido, y no hay puntos."""
+    filas = [jugador("Sin rival", "DL", 9.0, team_id=7),
+             jugador("Juega", "DL", 3.0, team_id=EQUIPO)]
+    lineup.for_matchday(filas, 1, outlook={EQUIPO: plan()})
 
     assert filas[0]["puntos_jornada"] == 0
     assert filas[0]["motivo"] == "no juega la J1"
@@ -149,41 +159,60 @@ def test_el_que_descansa_la_jornada_no_puntua():
     assert filas[1]["motivo"] is None
 
 
-def test_el_que_descansa_no_entra_en_el_once_por_bueno_que_sea():
+def test_el_aplazado_puntua_igual_pero_mas_tarde():
+    """El caso real: Athletic, Betis, Valencia, Madrid y Real Sociedad en la J1.
+
+    Tienen rival asignado y juegan la jornada; lo que no tienen es fecha. Darles
+    un cero era tan equivocado como alinear a quien no juega.
+    """
+    filas = [jugador("Aplazado", "DL", 10.0)]
+    lineup.for_matchday(filas, 1, outlook={EQUIPO: plan(aplazado=True)})
+
+    assert filas[0]["puntos_jornada"] == pytest.approx(10.0 * lineup.POSTPONED_DISCOUNT)
+    assert filas[0]["puntos_jornada"] > 0, "puntua, no es una baja"
+    assert filas[0]["motivo"] == "juega más tarde"
+    assert filas[0]["aplazado"]
+
+
+def test_un_buen_aplazado_sigue_ganandole_el_sitio_a_un_titular_mediocre():
+    """El descuento es suave a proposito: sentarlo tambien seria una decision."""
     filas = plantilla(4, 4, 2)
-    crack = jugador("Crack", "DL", None, xpts=20.0, matchday=2)
-    filas.append(crack)
-    lineup.for_matchday(filas, 1)
+    filas.append(jugador("Crack aplazado", "DL", 9.0, team_id=9))
+    lineup.for_matchday(
+        filas, 1, outlook={EQUIPO: plan(), 9: plan(aplazado=True)}
+    )
 
     once = lineup.best_xi(filas)
-    assert "Crack" not in [f["name"] for f in once.titulares]
+    assert "Crack aplazado" in [f["name"] for f in once.titulares]
 
 
-def test_sin_saber_la_jornada_no_se_descarta_a_nadie():
+def test_sin_rejilla_de_calendario_no_se_descarta_a_nadie():
     """Antes de tener calendario, callarse es mejor que sentar a media plantilla."""
-    filas = [{"id": 1, "name": "Uno", "position": "DL", "xpts": 4.0, "matchday": 7}]
-    lineup.for_matchday(filas, None)
+    filas = [jugador("Uno", "DL", 4.0, xpts=4.0)]
+    lineup.for_matchday(filas, 1, outlook={})
     assert filas[0]["puntos_jornada"] == 4.0
+    assert filas[0]["motivo"] is None
 
 
 # --- los que no tienen historico --------------------------------------------
 
 
 def test_la_referencia_de_cada_puesto_es_la_mediana():
+    """Sobre la media BASE: `xpts_si_juega` ya lleva el ajuste del rival dentro
+    y quien llama vuelve a aplicarlo, asi que se contaria dos veces."""
     referencia = lineup.position_baseline({
-        1: {"position": "DL", "xpts_si_juega": 1.0},
-        2: {"position": "DL", "xpts_si_juega": 4.0},
-        3: {"position": "DL", "xpts_si_juega": 40.0},
-        4: {"position": "PT", "xpts_si_juega": 2.0},
+        1: {"position": "DL", "media_base": 1.0},
+        2: {"position": "DL", "media_base": 4.0},
+        3: {"position": "DL", "media_base": 40.0},
+        4: {"position": "PT", "media_base": 2.0},
     })
     assert referencia["DL"] == 4.0, "la mediana, que no se la lleva el crack"
     assert referencia["PT"] == 2.0
 
 
 def test_un_desconocido_vale_lo_que_uno_cualquiera_de_su_puesto():
-    filas = [{"id": 1, "name": "Debut", "position": "DL", "xpts": None,
-              "probability": 0.5, "status": "ok"}]
-    lineup.for_matchday(filas, 1, baseline={"DL": 4.0})
+    filas = [jugador("Debut", "DL", None, media_base=None, probability=0.5)]
+    lineup.for_matchday(filas, 1, baseline={"DL": 4.0}, outlook={EQUIPO: plan()})
 
     assert filas[0]["puntos_jornada"] == pytest.approx(2.0)
     assert filas[0]["motivo"] == "sin datos"
@@ -192,16 +221,65 @@ def test_un_desconocido_vale_lo_que_uno_cualquiera_de_su_puesto():
 def test_un_lesionado_no_le_gana_el_sitio_a_un_desconocido():
     """De uno sabemos que no juega; del otro no sabemos nada, que es distinto."""
     filas = [
-        {"id": 1, "name": "Lesionado", "position": "DL", "xpts": 0.0,
-         "probability": 0.0, "status": "lesionado"},
-        {"id": 2, "name": "Debut", "position": "DL", "xpts": None,
-         "probability": 0.6, "status": "ok"},
+        jugador("Lesionado", "DL", 8.0, probability=0.0, status="lesionado"),
+        jugador("Debut", "DL", None, media_base=None, probability=0.6),
     ]
-    lineup.for_matchday(filas, 1, baseline={"DL": 4.0})
+    lineup.for_matchday(filas, 1, baseline={"DL": 4.0}, outlook={EQUIPO: plan()})
 
     assert filas[0]["puntos_jornada"] == 0
     assert filas[0]["motivo"] == "lesionado"
     assert filas[1]["puntos_jornada"] > 0
+
+
+# --- los tres niveles de lesion ---------------------------------------------
+
+
+def test_solo_la_lesion_roja_es_una_baja():
+    """La roja no juega; la naranja y la verde si, y tratarlas igual era el fallo."""
+    filas = [
+        jugador("Rojo", "DL", 5.0, status="lesionado", probability=0.0),
+        jugador("Naranja", "DL", 5.0, status="tocado", probability=0.5),
+        jugador("Verde", "DL", 5.0, status="de_vuelta", probability=0.8),
+    ]
+    lineup.for_matchday(filas, 1, outlook={EQUIPO: plan()})
+
+    rojo, naranja, verde = filas
+    assert rojo["puntos_jornada"] == 0
+    assert naranja["puntos_jornada"] > 0
+    assert verde["puntos_jornada"] > naranja["puntos_jornada"]
+
+
+def test_el_que_vuelve_de_lesion_juega_menos_minutos():
+    """Su probabilidad dice si sera titular; esto, cuanto durara en el campo."""
+    sano = jugador("Sano", "DL", 5.0, probability=0.8)
+    volviendo = jugador("Vuelve", "DL", 5.0, probability=0.8, status="de_vuelta")
+    lineup.for_matchday([sano, volviendo], 1, outlook={EQUIPO: plan()})
+
+    assert volviendo["puntos_jornada"] == pytest.approx(
+        sano["puntos_jornada"] * xpts.RETURNING_MINUTES
+    )
+
+
+def test_se_avisa_de_quien_vuelve_de_lesion():
+    filas = plantilla(4, 4, 1)
+    filas.append(jugador("Vuelve", "DL", 3.0, status="de_vuelta"))
+    lineup.for_matchday(filas, 1, outlook={EQUIPO: plan()})
+
+    avisos = " ".join(lineup.best_xi(filas).avisos)
+    assert "Vuelven de lesión" in avisos
+    assert "Vuelve" in avisos
+
+
+def test_se_avisa_del_partido_aplazado():
+    filas = plantilla(4, 4, 1)
+    filas.append(jugador("Aplazado", "DL", 3.0, team_id=9))
+    lineup.for_matchday(
+        filas, 1, outlook={EQUIPO: plan(), 9: plan(aplazado=True)}
+    )
+
+    avisos = " ".join(lineup.best_xi(filas).avisos)
+    assert "aplazado" in avisos
+    assert "Puntúan igual" in avisos
 
 
 # --- los avisos -------------------------------------------------------------
@@ -379,14 +457,26 @@ def liga(db):
     local = repo.upsert_team(db, name="Local", provider="mister", external_id="1")
     visitante = repo.upsert_team(db, name="Visitante", provider="mister",
                                  external_id="2")
-    # Un tercer equipo que descansa la primera jornada, como los del Mundial.
+    # Dos equipos con el partido de la J1 aplazado, como los del Mundial: tienen
+    # rival asignado en la rejilla pero su proximo partido con fecha es de la J2.
     mundialista = repo.upsert_team(db, name="Mundialista", provider="mister",
                                    external_id="3")
     cuarto = repo.upsert_team(db, name="Cuarto", provider="mister", external_id="4")
+    # Y uno que de verdad no juega la jornada: no sale en la rejilla.
+    ausente = repo.upsert_team(db, name="Ausente", provider="mister",
+                               external_id="5")
     repo.upsert_fixture(db, season="2026-27", matchday=1,
                         home_team_id=local, away_team_id=visitante)
     repo.upsert_fixture(db, season="2026-27", matchday=2,
                         home_team_id=mundialista, away_team_id=cuarto)
+
+    # La rejilla que publica Mister: los cuatro tienen rival en la J1, incluidos
+    # los dos cuyo partido no tiene fecha.
+    for equipo, contrario, casa in ((local, visitante, 1), (visitante, local, 0),
+                                    (mundialista, cuarto, None),
+                                    (cuarto, mundialista, None)):
+        repo.record_schedule(db, season="2026-27", matchday=1, team_id=equipo,
+                             opponent_id=contrario, is_home=casa)
 
     def fichar(nombre, posicion, *, media=3.0, dueno=None, equipo=None,
                en_mercado=False, precio=None, valor=1_000_000):
@@ -418,8 +508,9 @@ def liga(db):
         for i in range(cuantos):
             fichar(f"{posicion}{i}", posicion, dueno=yo)
 
-    return {"yo": yo, "rival": rival, "fichar": fichar,
-            "mundialista": mundialista, "league_id": league_id}
+    return {"yo": yo, "rival": rival, "fichar": fichar, "local": local,
+            "mundialista": mundialista, "ausente": ausente,
+            "league_id": league_id}
 
 
 def test_de_punta_a_punta_sale_un_once_completo(db, liga):
@@ -431,18 +522,31 @@ def test_de_punta_a_punta_sale_un_once_completo(db, liga):
     assert all(f["puntos_jornada"] > 0 for f in once.titulares)
 
 
-def test_de_punta_a_punta_no_se_alinea_a_quien_descansa(db, liga):
-    """El caso real: el mejor jugador de la plantilla no juega la J1."""
+def test_de_punta_a_punta_el_aplazado_juega_la_jornada(db, liga):
+    """El caso real: su partido de la J1 aun no tiene fecha, pero se juega."""
     liga["fichar"]("Estrella", "DL", media=12.0, dueno=liga["yo"],
                    equipo=liga["mundialista"])
 
     datos = lineup.recommend(db, manager_id=liga["yo"], rules=REGLAS, model=MODELO)
     titulares = {f["name"]: f for f in datos["once"].titulares}
-    assert "Estrella" not in titulares
+
+    assert "Estrella" in titulares, "puntua en la jornada, aunque sea mas tarde"
+    assert titulares["Estrella"]["aplazado"]
+    assert titulares["Estrella"]["motivo"] == "juega más tarde"
+    assert any("aplazado" in aviso for aviso in datos["once"].avisos)
+
+
+def test_de_punta_a_punta_no_se_alinea_a_quien_no_tiene_partido(db, liga):
+    """Sin rival asignado en la rejilla no hay jornada que jugar."""
+    liga["fichar"]("Fuera", "DL", media=12.0, dueno=liga["yo"],
+                   equipo=liga["ausente"])
+
+    datos = lineup.recommend(db, manager_id=liga["yo"], rules=REGLAS, model=MODELO)
+    assert "Fuera" not in [f["name"] for f in datos["once"].titulares]
 
     banquillo = {f["name"]: f for f in datos["once"].suplentes}
-    assert banquillo["Estrella"]["motivo"] == "no juega la J1"
-    assert banquillo["Estrella"]["xpts"] > 0, "puntuaria, pero no esta jornada"
+    assert banquillo["Fuera"]["motivo"] == "no juega la J1"
+    assert banquillo["Fuera"]["puntos_jornada"] == 0
 
 
 def test_de_punta_a_punta_propone_el_fichaje_que_mejora_el_once(db, liga):

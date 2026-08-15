@@ -36,8 +36,28 @@ def test_todos_tienen_posicion(team_html):
 def test_estados_de_lesion_y_sancion(team_html):
     rows = FutbolFantasyScraper.parse_players(team_html)
     estados = {r.status for r in rows}
-    assert estados <= {"ok", "duda", "lesionado", "sancionado", "no_disponible", "ausente"}
+    assert estados <= {"ok", "duda", "lesionado", "tocado", "de_vuelta",
+                       "sancionado", "no_disponible", "ausente"}
     assert "lesionado" in estados, "el fixture incluye lesionados conocidos"
+
+
+def test_los_tres_niveles_de_lesion_salen_separados(team_html):
+    """`data-lesion` es la GRAVEDAD, no un si/no, y esto estuvo al reves.
+
+    La condicion era `lesion > 0`, asi que el rojo -que vale 0 y es el unico que
+    de verdad no juega- pasaba por sano, y el verde -que si juega- se descartaba
+    como baja. Los tres casos estan verificados a mano contra el bloque "Estado
+    fisico de la plantilla" del propio fixture:
+
+        Sergi Canós      gravedad-0  "Rotura de lig. cruzado anterior"
+        Alberto Marí     gravedad-1  "Duda para la jornada"
+        Rubén Iranzo     gravedad-2  "Disponible para la jornada"
+    """
+    por_slug = {r.slug: r for r in FutbolFantasyScraper.parse_players(team_html)}
+
+    assert por_slug["sergi-canos"].status == "lesionado"
+    assert por_slug["alberto-mari"].status == "tocado"
+    assert por_slug["ruben-iranzo"].status == "de_vuelta"
 
 
 def test_probabilidad_normalizada_entre_0_y_1(team_html):
