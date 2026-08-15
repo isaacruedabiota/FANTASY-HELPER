@@ -173,6 +173,35 @@ def upsert_league(
     ).fetchone()["id"]
 
 
+def link_player_alias(
+    conn: sqlite3.Connection,
+    *,
+    player_id: int,
+    provider: str,
+    external_id: str,
+    external_name: str | None = None,
+    confidence: float = 1.0,
+) -> None:
+    """Ata un jugador ya identificado al id que usa otra fuente.
+
+    Distinto de `resolve_player`, que CREA el jugador si no lo encuentra. Aqui
+    no se crea nada: el emparejado ya lo ha decidido quien llama, y si se
+    equivoca preferimos un alias suelto a un jugador duplicado en el catalogo.
+    """
+    conn.execute(
+        """
+        INSERT INTO player_alias
+            (player_id, provider, external_id, external_name, confidence)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (provider, external_id) DO UPDATE SET
+            player_id = excluded.player_id,
+            external_name = COALESCE(excluded.external_name,
+                                     player_alias.external_name)
+        """,
+        (player_id, provider, str(external_id), external_name, confidence),
+    )
+
+
 def record_scoring_system(
     conn: sqlite3.Connection, *, league_id: int, system: str | None
 ) -> str | None:

@@ -85,6 +85,13 @@ RISKY_PROBABILITY = 0.5
 #: es justo lo que tiene que salir.
 POSTPONED_DISCOUNT = 0.85
 
+#: Como se dice en pantalla de donde sale la media de un jugador que no ha
+#: jugado nunca en LaLiga. El historial propio no se etiqueta: es el caso normal.
+ORIGIN_LABELS = {
+    xpts.SOURCE_RATINGS: "por sus notas",
+    xpts.SOURCE_VALUE: "por su precio",
+}
+
 
 @dataclass
 class Once:
@@ -242,10 +249,11 @@ def for_matchday(
             # Ni historico, ni temporada en curso, ni precio del que tirar. Se
             # le da la media tipica de su puesto, que es el ultimo recurso.
             media, motivo = referencia.get(fila.get("position")) or 0.0, "sin datos"
-        elif fila.get("sin_historial"):
-            # Nunca ha jugado en LaLiga: su media sale de lo que cuesta. Se dice
-            # de donde viene el numero en vez de presentarlo como medido.
-            motivo = "por su precio"
+        elif fila.get("origen_media") in ORIGIN_LABELS:
+            # Nunca ha jugado en LaLiga: su media sale de sus notas en otra liga
+            # o, a falta de eso, de lo que cuesta. Se dice de donde viene el
+            # numero en vez de presentarlo como si estuviera medido aqui.
+            motivo = ORIGIN_LABELS[fila["origen_media"]]
 
         # Las dos rebajas que no dependen del rival: lo probable que sea que
         # juegue y, si vuelve de lesion, los minutos que le van a dar.
@@ -477,12 +485,22 @@ def _avisos(once: Once) -> list[str]:
             "por si te dice algo."
         )
 
-    por_precio = [f for f in juegan if f.get("sin_historial")]
+    por_notas = [
+        f for f in juegan if f.get("origen_media") == xpts.SOURCE_RATINGS
+    ]
+    if por_notas:
+        nombres = ", ".join(f["name"] for f in por_notas)
+        avisos.append(
+            "Nunca han jugado en LaLiga: su media sale de sus notas de "
+            f"SofaScore en otras ligas, convertidas a puntos: {nombres}."
+        )
+
+    por_precio = [f for f in juegan if f.get("origen_media") == xpts.SOURCE_VALUE]
     if por_precio:
         nombres = ", ".join(f["name"] for f in por_precio)
         avisos.append(
-            "Nunca han jugado en LaLiga, así que su media se deduce de lo que "
-            f"cuestan: {nombres}."
+            "Ni han jugado en LaLiga ni se les encuentran notas, así que su "
+            f"media se deduce de lo que cuestan: {nombres}."
         )
 
     sin_datos = [f for f in juegan if f.get("sin_datos")]

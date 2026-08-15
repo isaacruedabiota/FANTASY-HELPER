@@ -142,14 +142,32 @@ class ValuePrior:
         return max(self.low, min(self.high, media))
 
 
+#: De donde sale la media de un jugador, de mas fiable a menos:
+#:
+#:   historial  sus temporadas en LaLiga, que es lo que mide el juego
+#:   notas      sus notas de SofaScore en otras ligas, convertidas a puntos
+#:   precio     solo lo que cuesta, cuando no hay ninguna de las dos
+#:
+#: Viaja hasta la pantalla porque un 4,3 medido en cinco temporadas y un 4,3
+#: deducido de un precio no son la misma cifra, aunque se escriban igual.
+SOURCE_HISTORY = "historial"
+SOURCE_RATINGS = "notas"
+SOURCE_VALUE = "precio"
+
+
 @dataclass
 class Averages:
     """Media base de cada jugador y de donde ha salido."""
 
     values: dict[int, float]
-    #: Los que no tienen ni un partido registrado y van estimados por su precio.
-    estimated: set[int]
+    #: {player_id: SOURCE_*}
+    sources: dict[int, str]
     priors: dict[str | None, ValuePrior]
+
+    @property
+    def estimated(self) -> set[int]:
+        """Los que solo tienen su precio. Sin evidencia ninguna de como juegan."""
+        return {p for p, o in self.sources.items() if o == SOURCE_VALUE}
 
 
 @dataclass
@@ -427,7 +445,7 @@ def schedule_factor(
 _HISTORY_SQL = """
     SELECT player_id, season, avg_points, matches_played
     FROM player_season_stat
-    WHERE provider = 'mister' AND season != ?
+    WHERE provider = ? AND season != ?
     ORDER BY player_id, season DESC
 """
 
@@ -475,11 +493,24 @@ def base_averages(conn: sqlite3.Connection) -> Averages:
     estimacion por precio y marcados en `estimated`, para que la pantalla pueda
     decir de donde sale su numero.
     """
-    history: dict[int, list[tuple[str, float, int]]] = {}
-    for fila in conn.execute(_HISTORY_SQL, (settings.season,)):
-        history.setdefault(fila["player_id"], []).append(
-            (fila["season"], fila["avg_points"], fila["matches_played"] or 0)
-        )
+    def historial(provider: str) -> dict[int, list[tuple[str, float, int]]]:
+        filas: dict[int, list[tuple[str, float, int]]] = {}
+        for fila in conn.execute(_HISTORY_SQL, (provider, settings.season)):
+            filas.setdefault(fila["player_id"], []).append(
+                (fila["season"], fila["avg_points"], fila["matches_played"] or 0)
+            )
+        return filas
+
+    history = historial("mister")
+    # Las notas de SofaScore son un RESPALDO, no un complemento: se usan solo
+    # para quien no tiene ni una temporada aqui. Mezclar las dos fuentes en un
+    # mismo jugador juntaria puntos de Mixto 2 con puntos derivados de la nota
+    # estadistica, que se parecen pero no son lo mismo.
+    ratings = {
+        player_id: temporadas
+        for player_id, temporadas in historial("sofascore").items()
+        if player_id not in history
+    }
 
     current = {
         fila["player_id"]: (fila["points"], fila["matchdays"])
@@ -494,6 +525,9 @@ def base_averages(conn: sqlite3.Connection) -> Averages:
         for fila in conn.execute(_VALUES_SQL)
     }
 
+    # La recta precio -> media se ajusta SOLO con historial de LaLiga, que es
+    # lo que de verdad mide el juego. Las notas convertidas entran despues como
+    # dato de un jugador, no como material para calibrar.
     crudas: dict[int, tuple[float, float]] = {}
     for player_id in set(history) | set(current):
         puntos, jornadas = current.get(player_id, (None, 0))
@@ -513,27 +547,37 @@ def base_averages(conn: sqlite3.Connection) -> Averages:
         prior = priors.get(posiciones.get(player_id))
         return prior.estimate(valores.get(player_id)) if prior else None
 
-    medias = {
-        player_id: blended_average(
+    medias: dict[int, float] = {}
+    fuentes: dict[int, str] = {}
+    for player_id in crudas:
+        medias[player_id] = blended_average(
             history.get(player_id, []),
             current_points=current.get(player_id, (None, 0))[0],
             current_matchdays=current.get(player_id, (None, 0))[1],
             prior=referencia(player_id),
         )
-        for player_id in crudas
-    }
+        fuentes[player_id] = SOURCE_HISTORY
 
-    # Los que no tienen ni un partido: su media ES la referencia de su precio.
-    estimated: set[int] = set()
+    # Los que no han jugado aqui pero si en otra liga: sus notas de SofaScore,
+    # ya convertidas a puntos, se contraen hacia la referencia de su precio
+    # igual que cualquier otro historial. Esa contraccion es lo que amortigua
+    # que una nota de la Eredivisie no valga lo que una de la Premier.
+    for player_id, temporadas in ratings.items():
+        media = blended_average(temporadas, prior=referencia(player_id))
+        if media is not None:
+            medias[player_id] = media
+            fuentes[player_id] = SOURCE_RATINGS
+
+    # Y los que no tienen ni eso: su media ES la referencia de su precio.
     for player_id in valores:
         if player_id in medias:
             continue
         estimado = referencia(player_id)
         if estimado is not None:
             medias[player_id] = estimado
-            estimated.add(player_id)
+            fuentes[player_id] = SOURCE_VALUE
 
-    return Averages(values=medias, estimated=estimated, priors=priors)
+    return Averages(values=medias, sources=fuentes, priors=priors)
 
 
 def _value_priors(
@@ -643,10 +687,11 @@ def expected_points(
         resultado[player_id] = {
             "media_base": media,
             "position": posicion,
-            # Sin un solo partido registrado: su media sale de lo que cuesta.
-            # Viaja hasta la pantalla porque no es lo mismo un 4,3 medido en
-            # cinco temporadas que un 4,3 deducido de un precio.
-            "sin_historial": player_id in resumen.estimated,
+            # De donde sale su media: 'historial', 'notas' o 'precio'.
+            "origen_media": resumen.sources.get(player_id, SOURCE_HISTORY),
+            # Sin ninguna evidencia de como juega, solo su precio. Es el caso
+            # que no permite recomendar una venta.
+            "sin_historial": resumen.sources.get(player_id) == SOURCE_VALUE,
             "ajuste_rival": ajustes.opponent,
             "ajuste_sede": ajustes.venue,
             "matchday": partido["matchday"] if partido is not None else None,
@@ -743,7 +788,7 @@ def attach(
             datos.update(
                 {clave: prediccion[clave]
                  for clave in ("media_base", "matchday", "sin_historial",
-                               "ajuste_rival", "ajuste_sede",
+                               "origen_media", "ajuste_rival", "ajuste_sede",
                                "ajuste_calendario", "proximas")}
             )
             # Lo que rendiria por jornada durante las proximas semanas, en vez

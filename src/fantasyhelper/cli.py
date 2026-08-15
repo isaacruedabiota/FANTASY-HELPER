@@ -311,6 +311,44 @@ def plantilla(
 
 
 @app.command()
+def sofascore(
+    limite: int = typer.Option(None, help="Cuantos jugadores mirar como mucho."),
+    rehacer: bool = typer.Option(
+        False, "--rehacer", help="Repasar tambien a los que ya tienen notas."
+    ),
+) -> None:
+    """Trae el pasado de los que nunca han jugado en LaLiga.
+
+    Mister solo conoce esta liga, así que de un fichaje llegado de fuera no
+    publica ni una temporada. SofaScore sí, y además es la fuente que usa el
+    propio Mister para su sistema estadístico: las notas son las mismas.
+
+    Va despacio a propósito —segundo y medio entre peticiones— y cachea una
+    semana: las temporadas cerradas no cambian.
+    """
+    from fantasyhelper.adapters.sofascore.scraper import backfill
+
+    conn = connect()
+    try:
+        with console.status("Buscando en SofaScore…"):
+            cuenta = backfill(conn, limit=limite, only_missing=not rehacer)
+        console.print(
+            f"\n  mirados      [bold]{cuenta['mirados']}[/bold]\n"
+            f"  emparejados  [green]{cuenta['emparejados']}[/green]\n"
+            f"  sin localizar[yellow] {cuenta['sin_encontrar']}[/yellow]\n"
+            f"  temporadas   {cuenta['temporadas']}\n"
+        )
+        if cuenta["sin_encontrar"]:
+            console.print(
+                "[dim]A los que no se localizan no se les inventa nada: siguen "
+                "estimados por su precio. Un jugador con el historial de otro "
+                "sería mucho peor que uno sin historial.[/dim]"
+            )
+    finally:
+        conn.close()
+
+
+@app.command()
 def once(
     saldo: int = typer.Option(None, help="Tope de gasto a considerar, en euros."),
     limite: int = typer.Option(6, help="Cuantas mejoras mostrar."),
