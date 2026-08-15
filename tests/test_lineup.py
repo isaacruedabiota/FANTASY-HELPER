@@ -291,6 +291,56 @@ def test_se_avisa_del_partido_aplazado():
     assert "Puntúan igual" in avisos
 
 
+# --- el ex-equipo -----------------------------------------------------------
+
+
+def test_se_marca_a_quien_juega_contra_su_exequipo():
+    fila = jugador("Vuelve a casa", "DL", 3.0)
+    lineup.for_matchday(
+        [fila], 1,
+        outlook={EQUIPO: dict(plan(), opponent_id=77, opponent="Su ex")},
+        former={fila["id"]: {77: "Su ex"}},
+    )
+    assert fila["exequipo"]
+
+
+def test_el_exequipo_no_toca_los_puntos():
+    """Es un dato, no un ajuste: no hay ni un partido suyo contra ellos."""
+    con = jugador("Con ex", "DL", 4.0)
+    sin = jugador("Sin ex", "DL", 4.0)
+    lineup.for_matchday(
+        [con, sin], 1,
+        outlook={EQUIPO: dict(plan(), opponent_id=77, opponent="Su ex")},
+        former={con["id"]: {77: "Su ex"}},
+    )
+    assert con["puntos_jornada"] == sin["puntos_jornada"]
+    assert not sin["exequipo"]
+
+
+def test_otro_rival_no_es_su_exequipo():
+    fila = jugador("Uno", "DL", 3.0)
+    lineup.for_matchday(
+        [fila], 1,
+        outlook={EQUIPO: dict(plan(), opponent_id=5, opponent="Otro")},
+        former={fila["id"]: {77: "Su ex"}},
+    )
+    assert not fila["exequipo"]
+
+
+def test_se_avisa_del_exequipo_sin_prometer_nada():
+    filas = plantilla(4, 4, 1)
+    crack = jugador("Nostálgico", "DL", 3.0)
+    filas.append(crack)
+    lineup.for_matchday(
+        filas, 1,
+        outlook={EQUIPO: dict(plan(), opponent_id=77, opponent="Su ex")},
+        former={crack["id"]: {77: "Su ex"}},
+    )
+    avisos = " ".join(lineup.best_xi(filas).avisos)
+    assert "ex-equipo" in avisos
+    assert "No mueve el cálculo" in avisos
+
+
 # --- los avisos -------------------------------------------------------------
 
 

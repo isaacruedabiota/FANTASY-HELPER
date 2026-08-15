@@ -159,7 +159,12 @@ def test_un_barato_que_sube_puede_ganar_a_un_caro_estancado(db, liga):
 
 
 def test_no_se_recomienda_vender_lo_que_no_se_conoce(db, liga):
-    """No saber lo que rinde un jugador no es motivo para venderlo."""
+    """No saber lo que rinde un jugador no es motivo para venderlo.
+
+    Su media se deduce ahora de lo que cuesta, que sirve para fichar pero no
+    para vender: deshacerse de alguien a quien no hemos visto jugar ni una vez,
+    por una cifra sacada de su precio, es ruido y ademas irreversible.
+    """
     liga["fichar"]("Conocido", media=3.0, dueno=liga["yo"])
     pid = repo.resolve_player(db, provider="mister", external_id="y",
                               name="Sin datos", team_id=None, position="DL")

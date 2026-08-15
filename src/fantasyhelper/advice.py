@@ -166,7 +166,17 @@ def briefing(
     mios = enriquecer(queries.squad(conn, manager_id))
     # Fuera los que no tienen ninguna de las dos mitades: no saber lo que rinde
     # un jugador no es motivo para recomendar venderlo.
-    vendibles = [f for f in mios if f["rendimiento_semanal"] is not None]
+    #
+    # Y fuera tambien los que nunca han jugado en LaLiga, cuya media se deduce
+    # de lo que cuestan. Esa estimacion sirve para FICHAR -es justo lo que se
+    # quiere saber de un recien llegado- pero no para vender, que es una
+    # decision irreversible: aconsejar deshacerse de alguien a quien no hemos
+    # visto jugar ni una vez es ruido, no consejo. En cuanto dispute un par de
+    # jornadas deja de estar en este caso y vuelve a la lista.
+    vendibles = [
+        f for f in mios
+        if f["rendimiento_semanal"] is not None and not f.get("sin_historial")
+    ]
     vendibles.sort(key=_rendimiento)
 
     # Solo lo que esta HOY en el mercado. Antes salia aqui cualquier jugador sin

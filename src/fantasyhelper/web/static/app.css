@@ -470,6 +470,17 @@ h2 {
  * cual es en los dos casos; el color solo lo refuerza. */
 .hueco.apagado .motivo { color: var(--baja); border-color: var(--baja); }
 
+/* Marca de ex-equipo. Es informativa y no cambia ninguna cifra, asi que va
+ * discreta: ni color de estado ni peso, solo una etiqueta que se lee. */
+.sede.ex, .pts .ex {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.pts .ex { margin-left: 3px; }
+
 /* Chip de por que un jugador no cuenta: 'no juega la J1', 'lesionado'. Usa el
  * color de aviso, pero el texto dice el motivo por si el color no llega. */
 .motivo {

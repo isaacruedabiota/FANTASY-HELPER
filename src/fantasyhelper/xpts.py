@@ -40,7 +40,9 @@ media condicionada, no una prediccion de la jornada.
 
 from __future__ import annotations
 
+import math
 import sqlite3
+import statistics
 from dataclasses import dataclass
 
 from fantasyhelper.config import settings
@@ -71,6 +73,11 @@ PRIOR_EVIDENCE = 10.0
 #: casos raros que se quieren corregir.
 MIN_EVIDENCE_FOR_PRIOR = FULL_SEASON
 
+#: Jugadores que hacen falta en una posicion para fiarse de la recta que
+#: relaciona precio y rendimiento. Con menos se usa la mediana del puesto, que
+#: es lo que habia antes.
+MIN_FOR_VALUE_PRIOR = 20
+
 #: Cuanto mueve la fuerza del rival al resultado esperado. Un 0.25 significa
 #: que enfrentarse al mejor equipo de la liga descuenta como mucho un 25%.
 #: Es un prior, no una medicion: no tenemos datos de puntos concedidos, solo
@@ -100,6 +107,49 @@ MIN_PLAYERS_FOR_STRENGTH = 8
 #: Cuantos jugadores definen la fuerza de un equipo. Se toman los mejores, no
 #: todos: la plantilla entera diluye la calidad con suplentes que no juegan.
 SQUAD_CORE = 11
+
+
+@dataclass
+class ValuePrior:
+    """Lo que cabe esperar de un jugador de un puesto sabiendo lo que cuesta.
+
+    El precio es lo unico que sabemos de un fichaje recien llegado del
+    extranjero, y no es poco: es el juicio agregado de miles de personas que
+    SI han visto jugar a Antony o a Bernardo Silva. Ignorarlo y darles la
+    mediana de su puesto los iguala con un suplente de 300.000 €.
+
+    La recta va contra el logaritmo del valor porque el precio se reparte por
+    ordenes de magnitud -de 200.000 a 15 millones- y en lineal los caros
+    aplastarian el ajuste.
+    """
+
+    slope: float
+    intercept: float
+    samples: int
+    #: Rango observado de medias en ese puesto. La recta no se extrapola fuera:
+    #: un valor extremo daria una media que nadie ha hecho nunca.
+    low: float
+    high: float
+    #: Error medio absoluto de la recta y el de usar la mediana, para poder
+    #: decir en pantalla si compensa.
+    error: float = 0.0
+    error_median: float = 0.0
+
+    def estimate(self, value: int | None) -> float | None:
+        if not value or value <= 0:
+            return None
+        media = self.intercept + self.slope * math.log10(value)
+        return max(self.low, min(self.high, media))
+
+
+@dataclass
+class Averages:
+    """Media base de cada jugador y de donde ha salido."""
+
+    values: dict[int, float]
+    #: Los que no tienen ni un partido registrado y van estimados por su precio.
+    estimated: set[int]
+    priors: dict[str | None, ValuePrior]
 
 
 @dataclass
@@ -389,18 +439,41 @@ _CURRENT_SQL = """
 """
 
 
-def base_averages(conn: sqlite3.Connection) -> dict[int, float]:
-    """Media base de todos los jugadores de los que se sabe algo.
+_VALUES_SQL = """
+    SELECT player_id, market_value FROM (
+        SELECT player_id, market_value,
+               ROW_NUMBER() OVER (
+                   PARTITION BY player_id ORDER BY snapshot_date DESC
+               ) AS rn
+        FROM player_value_snapshot
+        WHERE provider = 'mister' AND source = 'mister' AND market_value > 0
+    ) WHERE rn = 1
+"""
+
+
+def base_averages(conn: sqlite3.Connection) -> Averages:
+    """Media base de cada jugador, y de donde sale.
 
     Dos pasadas. En la primera se calcula la media de cada jugador y cuanta
-    evidencia la respalda; con eso se saca la media tipica de cada posicion,
-    usando solo a los que tienen recorrido. En la segunda, cada jugador se
-    acerca a la media de su puesto en proporcion a lo poco que sepamos de el.
+    evidencia la respalda; con eso se saca lo que cabe esperar de un jugador de
+    su puesto y su precio, usando solo a los que tienen recorrido. En la
+    segunda, cada jugador se acerca a esa referencia en proporcion a lo POCO que
+    sepamos de el.
 
-    La referencia va por posicion y no por liga entera porque las escalas no
-    son comparables: un portero puntua de otra manera que un delantero, y
-    algunos hasta en negativo. Compararlos contra una media unica desplazaria a
-    todos los porteros hacia arriba y a todos los delanteros hacia abajo.
+    La referencia va por posicion porque las escalas no son comparables: un
+    portero puntua de otra manera que un delantero, y algunos hasta en negativo.
+
+    Y dentro de cada posicion va por PRECIO y no por la mediana del puesto. La
+    mediana trata igual a Antony, que vale 15 millones, y a un suplente de
+    300.000 €, cuando lo unico que sabemos de los dos es justamente cuanto
+    valen. Medido sobre los 289 jugadores con 30 partidos o mas, el error medio
+    de la referencia baja de 0,68 a 0,51 puntos -un 25% menos-, y en los medios
+    un 32%.
+
+    Los que no tienen ni un partido registrado -140 en el catalogo actual, casi
+    todos fichajes llegados de otras ligas- ya no se quedan fuera: entran con la
+    estimacion por precio y marcados en `estimated`, para que la pantalla pueda
+    decir de donde sale su numero.
     """
     history: dict[int, list[tuple[str, float, int]]] = {}
     for fila in conn.execute(_HISTORY_SQL, (settings.season,)):
@@ -416,6 +489,10 @@ def base_averages(conn: sqlite3.Connection) -> dict[int, float]:
         fila["id"]: fila["position"]
         for fila in conn.execute("SELECT id, position FROM player")
     }
+    valores = {
+        fila["player_id"]: fila["market_value"]
+        for fila in conn.execute(_VALUES_SQL)
+    }
 
     crudas: dict[int, tuple[float, float]] = {}
     for player_id in set(history) | set(current):
@@ -430,33 +507,90 @@ def base_averages(conn: sqlite3.Connection) -> dict[int, float]:
         _, evidencia = _weighted_history(history.get(player_id, []))
         crudas[player_id] = (media, evidencia + jornadas)
 
-    referencia = _position_priors(crudas, posiciones)
+    priors = _value_priors(crudas, posiciones, valores)
 
-    return {
+    def referencia(player_id: int) -> float | None:
+        prior = priors.get(posiciones.get(player_id))
+        return prior.estimate(valores.get(player_id)) if prior else None
+
+    medias = {
         player_id: blended_average(
             history.get(player_id, []),
             current_points=current.get(player_id, (None, 0))[0],
             current_matchdays=current.get(player_id, (None, 0))[1],
-            prior=referencia.get(posiciones.get(player_id)),
+            prior=referencia(player_id),
         )
         for player_id in crudas
     }
 
+    # Los que no tienen ni un partido: su media ES la referencia de su precio.
+    estimated: set[int] = set()
+    for player_id in valores:
+        if player_id in medias:
+            continue
+        estimado = referencia(player_id)
+        if estimado is not None:
+            medias[player_id] = estimado
+            estimated.add(player_id)
 
-def _position_priors(
-    crudas: dict[int, tuple[float, float]], posiciones: dict[int, str | None]
-) -> dict[str | None, float]:
-    """Media tipica de cada posicion, sobre los jugadores con recorrido."""
-    por_posicion: dict[str | None, list[float]] = {}
+    return Averages(values=medias, estimated=estimated, priors=priors)
+
+
+def _value_priors(
+    crudas: dict[int, tuple[float, float]],
+    posiciones: dict[int, str | None],
+    valores: dict[int, int],
+) -> dict[str | None, ValuePrior]:
+    """Recta precio -> media de cada posicion, sobre los que tienen recorrido.
+
+    Se ajusta solo con los jugadores de los que sabemos bastante: si entrasen
+    los de cuatro partidos, la recta la marcarian precisamente los casos raros
+    que se quieren corregir.
+
+    Cuando en una posicion no hay jugadores suficientes se devuelve una recta
+    plana con la mediana, que es exactamente lo que habia antes. Asi el peor
+    caso del cambio es no empeorar nada.
+    """
+    por_posicion: dict[str | None, list[tuple[float, float]]] = {}
     for player_id, (media, evidencia) in crudas.items():
-        if evidencia >= MIN_EVIDENCE_FOR_PRIOR:
-            por_posicion.setdefault(posiciones.get(player_id), []).append(media)
+        if evidencia < MIN_EVIDENCE_FOR_PRIOR:
+            continue
+        valor = valores.get(player_id)
+        por_posicion.setdefault(posiciones.get(player_id), []).append(
+            (math.log10(valor) if valor else 0.0, media)
+        )
 
-    return {
-        posicion: sorted(medias)[len(medias) // 2]
-        for posicion, medias in por_posicion.items()
-        if medias
-    }
+    priors: dict[str | None, ValuePrior] = {}
+    for posicion, muestras in por_posicion.items():
+        medias = [m for _, m in muestras]
+        mediana = sorted(medias)[len(medias) // 2]
+        plana = ValuePrior(
+            slope=0.0, intercept=mediana, samples=len(muestras),
+            low=min(medias), high=max(medias),
+            error_median=statistics.mean(abs(m - mediana) for m in medias),
+        )
+        plana.error = plana.error_median
+
+        utiles = [(x, m) for x, m in muestras if x]
+        if len(utiles) >= MIN_FOR_VALUE_PRIOR and len({x for x, _ in utiles}) > 1:
+            recta = statistics.linear_regression(
+                [x for x, _ in utiles], [m for _, m in utiles]
+            )
+            ajustada = ValuePrior(
+                slope=recta.slope, intercept=recta.intercept, samples=len(utiles),
+                low=min(medias), high=max(medias),
+                error=statistics.mean(
+                    abs(m - (recta.intercept + recta.slope * x)) for x, m in utiles
+                ),
+                error_median=plana.error_median,
+            )
+            # Solo si de verdad mejora. Una recta que acierta menos que la
+            # mediana es ruido con pinta de modelo.
+            priors[posicion] = ajustada if ajustada.error < plana.error else plana
+        else:
+            priors[posicion] = plana
+
+    return priors
 
 
 def expected_points(
@@ -474,7 +608,8 @@ def expected_points(
 
     Devuelve {player_id: {xpts, media_base, ajuste_rival, ajuste_sede, ...}}.
     """
-    medias = base_averages(conn)
+    resumen = base_averages(conn)
+    medias = resumen.values
     fuerza = team_strength(conn)
     calendario = next_fixtures(conn)
     proximas = upcoming(conn)
@@ -508,6 +643,10 @@ def expected_points(
         resultado[player_id] = {
             "media_base": media,
             "position": posicion,
+            # Sin un solo partido registrado: su media sale de lo que cuesta.
+            # Viaja hasta la pantalla porque no es lo mismo un 4,3 medido en
+            # cinco temporadas que un 4,3 deducido de un precio.
+            "sin_historial": player_id in resumen.estimated,
             "ajuste_rival": ajustes.opponent,
             "ajuste_sede": ajustes.venue,
             "matchday": partido["matchday"] if partido is not None else None,
@@ -603,8 +742,9 @@ def attach(
             # Mundial la tiene una mas alta. Alinear mira esa diferencia.
             datos.update(
                 {clave: prediccion[clave]
-                 for clave in ("media_base", "matchday", "ajuste_rival",
-                               "ajuste_sede", "ajuste_calendario", "proximas")}
+                 for clave in ("media_base", "matchday", "sin_historial",
+                               "ajuste_rival", "ajuste_sede",
+                               "ajuste_calendario", "proximas")}
             )
             # Lo que rendiria por jornada durante las proximas semanas, en vez
             # de solo la que viene. Es lo que importa al fichar: un jugador se

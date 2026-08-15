@@ -217,6 +217,7 @@ def for_matchday(
     *,
     baseline: dict[str, float] | None = None,
     outlook: dict[int, dict] | None = None,
+    former: dict[int, dict[int, str]] | None = None,
 ) -> list[dict]:
     """Anade a cada fila lo que se espera de ella EN ESTA JORNADA.
 
@@ -231,16 +232,20 @@ def for_matchday(
     """
     referencia = baseline or {}
     plan_por_equipo = outlook or {}
+    exequipos = former or {}
 
     for fila in rows:
         motivo = None
         media = fila.get("media_base")
         fila["sin_datos"] = media is None
         if media is None:
-            # Ni historico ni temporada en curso. Se le da la media tipica de su
-            # puesto: no es adivinar lo que hara, es decir que no sabemos nada
-            # de el y por tanto se parece a uno cualquiera de su posicion.
+            # Ni historico, ni temporada en curso, ni precio del que tirar. Se
+            # le da la media tipica de su puesto, que es el ultimo recurso.
             media, motivo = referencia.get(fila.get("position")) or 0.0, "sin datos"
+        elif fila.get("sin_historial"):
+            # Nunca ha jugado en LaLiga: su media sale de lo que cuesta. Se dice
+            # de donde viene el numero en vez de presentarlo como medido.
+            motivo = "por su precio"
 
         # Las dos rebajas que no dependen del rival: lo probable que sea que
         # juegue y, si vuelve de lesion, los minutos que le van a dar.
@@ -273,6 +278,13 @@ def for_matchday(
         fila["puntos_jornada"] = puntos
         fila["rival_jornada"] = plan["opponent"] if plan else None
         fila["motivo"] = motivo
+
+        # Contra su ex-equipo. Es un dato, no un ajuste: ver mas abajo por que
+        # no toca los puntos.
+        fila["exequipo"] = (
+            plan is not None
+            and plan["opponent_id"] in exequipos.get(fila["id"], {})
+        )
 
         # El rival que se ensena tiene que ser el de ESTA jornada. Sin esto, a
         # un aplazado se le pintaba el rival de su proximo partido con fecha
@@ -449,12 +461,36 @@ def _avisos(once: Once) -> list[str]:
             f"{queries.UNKNOWN_PROBABILITY:.0%} de oficio: {nombres}."
         )
 
+    # Contra su ex-equipo. Va como aviso y no como ajuste: para saber si a un
+    # jugador se le da bien el suyo harian falta sus partidos contra el, y no
+    # hay ni uno guardado. Aunque los hubiera serian uno o dos, que no dan para
+    # medir nada. Inventarse un factor seria peor que no decir nada; decirlo y
+    # que decida quien mira, no.
+    contra_su_ex = [f for f in juegan if f.get("exequipo")]
+    if contra_su_ex:
+        nombres = ", ".join(
+            f"{f['name']} contra el {f['rival_jornada']}" for f in contra_su_ex
+        )
+        avisos.append(
+            f"Juegan contra un ex-equipo suyo: {nombres}. No mueve el cálculo "
+            "— no hay partidos suyos contra ellos con los que medirlo — pero "
+            "por si te dice algo."
+        )
+
+    por_precio = [f for f in juegan if f.get("sin_historial")]
+    if por_precio:
+        nombres = ", ".join(f["name"] for f in por_precio)
+        avisos.append(
+            "Nunca han jugado en LaLiga, así que su media se deduce de lo que "
+            f"cuestan: {nombres}."
+        )
+
     sin_datos = [f for f in juegan if f.get("sin_datos")]
     if sin_datos:
         nombres = ", ".join(f["name"] for f in sin_datos)
         avisos.append(
-            "Sin historial del que tirar, así que van con la media de su puesto: "
-            f"{nombres}."
+            "Sin historial ni precio del que tirar, así que van con la media de "
+            f"su puesto: {nombres}."
         )
 
     return avisos
@@ -578,13 +614,15 @@ def recommend(
     jornada = xpts.current_matchday(conn)
     referencia = position_baseline(puntos)
     plan = matchday_outlook(conn, jornada)
+    anteriores = queries.former_teams(conn)
 
     def preparar(filas: list) -> list[dict]:
         enriquecidas = advice.weekly_euros(
             conn, filas, rules=rules, model=model, points=puntos, values=valores
         )
         return for_matchday(
-            enriquecidas, jornada, baseline=referencia, outlook=plan
+            enriquecidas, jornada, baseline=referencia, outlook=plan,
+            former=anteriores,
         )
 
     plantilla = preparar(queries.squad(conn, manager_id))

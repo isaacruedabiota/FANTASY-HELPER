@@ -414,6 +414,37 @@ def all_players(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def former_teams(conn: sqlite3.Connection) -> dict[int, dict[int, str]]:
+    """Equipos de LaLiga en los que ha estado cada jugador, sin contar el actual.
+
+    Sale del historico por temporada, que trae el club de cada una. Cubre solo
+    LaLiga -es lo unico que Mister publica-, asi que de un fichaje llegado de
+    fuera no sabemos su pasado, y eso hay que tenerlo presente al leerlo: la
+    ausencia de ex-equipo no significa que no lo tenga.
+
+    Lo que NO se hace con esto es tocar los puntos esperados. Para saber si a un
+    jugador se le da bien su ex-equipo harian falta sus partidos contra el, y de
+    eso no hay ni una fila: `player_points` esta vacia. Aunque la hubiera serian
+    uno o dos partidos por jugador, que no dan para medir nada de nadie. Asi que
+    se ensena el dato y decide quien mira.
+    """
+    filas = conn.execute(
+        """
+        SELECT s.player_id, s.team_id, t.name
+        FROM player_season_stat s
+        JOIN player p ON p.id = s.player_id
+        JOIN team t ON t.id = s.team_id
+        WHERE s.team_id IS NOT NULL
+          AND (p.team_id IS NULL OR s.team_id != p.team_id)
+        """
+    ).fetchall()
+
+    anteriores: dict[int, dict[int, str]] = {}
+    for fila in filas:
+        anteriores.setdefault(fila["player_id"], {})[fila["team_id"]] = fila["name"]
+    return anteriores
+
+
 def squad_daily_change(conn: sqlite3.Connection) -> dict[int, dict]:
     """Lo que sube o baja al dia la plantilla de cada participante.
 

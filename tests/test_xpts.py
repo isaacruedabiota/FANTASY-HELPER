@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from fantasyhelper import queries, xpts
@@ -194,12 +196,8 @@ def test_un_lesionado_no_suma_puntos_esperados(db, liga):
     assert fila["coste_por_punto"] is None, "sin puntos esperados no hay precio por punto"
 
 
-def test_un_debutante_no_estorba_al_ranking(db, liga):
-    """Sin historico no hay estimacion, y eso no puede colarse como un cero barato."""
-    repo.resolve_player(
-        db, provider="mister", external_id="nuevo", name="Debutante",
-        team_id=liga["casa"], position="DL",
-    )
+def test_sin_referencia_alguna_no_se_inventa_un_debutante(db, liga):
+    """Sin nadie con quien comparar no hay estimacion, y un cero seria peor."""
     pid = repo.resolve_player(
         db, provider="mister", external_id="nuevo", name="Debutante", position="DL"
     )
@@ -210,6 +208,82 @@ def test_un_debutante_no_estorba_al_ranking(db, liga):
     )
     assert fila["xpts"] is None
     assert fila["coste_por_punto"] is None
+
+
+# --- la referencia por precio -----------------------------------------------
+
+
+def _liga_con_recta(db, liga, n=30):
+    """Una posicion entera donde el precio predice la media, para ajustar."""
+    for indice in range(n):
+        valor = 300_000 * (1.25**indice)
+        liga["fichar"](liga["casa"], f"Ref{indice}", 2.0 + 0.5 * math.log10(valor),
+                       int(valor))
+
+
+def _debutante(db, liga, nombre, valor, posicion="DL"):
+    pid = repo.resolve_player(db, provider="mister", external_id=nombre,
+                              name=nombre, team_id=liga["casa"], position=posicion)
+    repo.record_player_value(db, provider="mister", player_id=pid,
+                             market_value=valor)
+    return pid
+
+
+def test_el_precio_estima_a_quien_nunca_ha_jugado_aqui(db, liga):
+    """140 jugadores del catalogo estan asi: llegan de otra liga sin historial.
+
+    Lo unico que sabemos de ellos es lo que cuestan, que es el juicio de miles
+    de personas que si les han visto jugar. Darles la mediana del puesto los
+    iguala con un suplente de 300.000 €.
+    """
+    _liga_con_recta(db, liga)
+    caro = _debutante(db, liga, "Antony", 15_000_000)
+    barato = _debutante(db, liga, "Suplente", 300_000)
+
+    medias = xpts.base_averages(db)
+    assert caro in medias.estimated and barato in medias.estimated
+    assert medias.values[caro] > medias.values[barato], (
+        "el de quince millones no puede valer lo mismo que el de trescientos mil"
+    )
+
+
+def test_la_recta_se_usa_solo_si_acierta_mas_que_la_mediana(db, liga):
+    """Una recta que falla mas que la mediana es ruido con pinta de modelo."""
+    for indice in range(30):
+        # Precio y media sin ninguna relacion: la recta no puede ganar.
+        liga["fichar"](liga["casa"], f"Azar{indice}", 3.0 + (indice % 5) * 0.4,
+                       int(300_000 * (1.3 ** (29 - indice))))
+
+    prior = xpts.base_averages(db).priors["DL"]
+    assert prior.error <= prior.error_median
+
+
+def test_con_pocos_jugadores_se_sigue_usando_la_mediana(db, liga):
+    """El peor caso del cambio tiene que ser no empeorar nada."""
+    for indice in range(xpts.MIN_FOR_VALUE_PRIOR - 5):
+        liga["fichar"](liga["casa"], f"Pocos{indice}", 3.0 + indice * 0.1,
+                       1_000_000 * (indice + 1))
+
+    prior = xpts.base_averages(db).priors["DL"]
+    assert prior.slope == 0.0, "sin muestra suficiente, recta plana"
+
+
+def test_la_estimacion_no_se_sale_de_lo_visto(db, liga):
+    """Extrapolar la recta a un precio extremo daria una media que nadie ha hecho."""
+    _liga_con_recta(db, liga)
+    prior = xpts.base_averages(db).priors["DL"]
+
+    assert prior.estimate(1) >= prior.low
+    assert prior.estimate(500_000_000) <= prior.high
+
+
+def test_quien_si_tiene_historial_no_pasa_por_estimado(db, liga):
+    _liga_con_recta(db, liga)
+    conocido = liga["fichar"](liga["casa"], "Conocido", 4.0, 2_000_000)
+
+    medias = xpts.base_averages(db)
+    assert conocido not in medias.estimated
+    assert xpts.expected_points(db)[conocido]["sin_historial"] is False
 
 
 def test_la_fuerza_de_un_equipo_desconocido_es_la_mediana(db, liga):
