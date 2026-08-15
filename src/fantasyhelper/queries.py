@@ -187,6 +187,44 @@ def mister_ids(conn: sqlite3.Connection) -> tuple[dict[int, str], dict[int, str]
     return mapa("player_alias", "player_id"), mapa("team_alias", "team_id")
 
 
+#: Como llama Mister a cada sistema de puntuacion y en que consiste.
+#: Transcrito de sus propias cadenas: 'as {Cronistas AS} cls {Clasico} marca
+#: {Cronistas MARCA} ... mix {Mixto} mix2 {Mixto 2} other {SofaScore}'.
+SCORING_SYSTEMS = {
+    "mr": ("SofaScore", "solo la nota estadística de SofaScore"),
+    "cls": ("Clásico", "el sistema clásico de Mister"),
+    "as": ("Cronistas AS", "la valoración de los cronistas de AS"),
+    "marca": ("Cronistas MARCA", "la valoración de los cronistas de MARCA"),
+    "marca_stats": ("Cronistas MARCA + Estadísticas",
+                    "los cronistas de MARCA con estadísticas"),
+    "md": ("Cronistas Mundo Deportivo",
+           "la valoración de los cronistas de Mundo Deportivo"),
+    "mix": ("Mixto", "la media de los cuatro: AS, MARCA, Mundo Deportivo y SofaScore"),
+    "mix2": ("Mixto 2",
+             "SofaScore al 50% más las valoraciones de AS y de MARCA"),
+}
+
+
+def scoring_system(conn: sqlite3.Connection) -> tuple[str | None, str, str]:
+    """(codigo, nombre, en que consiste) del sistema de puntuacion de la liga.
+
+    Importa porque es la UNIDAD de todo lo que calcula el modelo. Mister nos
+    entrega el historico ya en el sistema que la liga tenga puesto -capturamos
+    con la sesion dentro de ella-, cosa que se comprobo midiendo: sobre 36
+    jugadores, sus totales de la temporada pasada coinciden con los que
+    FutbolFantasy publica para 'Mister Mixto 2' con un ratio mediano de 1,000 y
+    una correlacion de 0,9999, treinta de ellos al punto exacto. Con SofaScore a
+    secas el orden se movia hasta diez puestos, asi que la distincion no es
+    cosmetica.
+    """
+    fila = conn.execute(
+        "SELECT scoring_system FROM league WHERE scoring_system IS NOT NULL LIMIT 1"
+    ).fetchone()
+    codigo = fila["scoring_system"] if fila else None
+    nombre, detalle = SCORING_SYSTEMS.get(codigo or "", ("desconocido", ""))
+    return codigo, nombre, detalle
+
+
 def my_manager(conn: sqlite3.Connection) -> sqlite3.Row | None:
     """El participante que soy yo, identificado al capturar /team."""
     return conn.execute(

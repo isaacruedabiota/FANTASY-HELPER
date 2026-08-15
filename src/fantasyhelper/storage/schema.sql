@@ -144,6 +144,12 @@ CREATE TABLE IF NOT EXISTS league (
     -- Bonificaciones de la liga, en JSON. No se pueden leer de ninguna API:
     -- estan en la pantalla de ajustes de la comunidad y hay que transcribirlas.
     bonus_rules   TEXT,
+    -- Sistema de puntuacion de la liga ('mix2', 'mr', 'as'...). Importa mas de
+    -- lo que parece: TODO el historico que guardamos viene en el sistema que
+    -- este puesto, asi que si el administrador lo cambia, las medias de antes y
+    -- las de despues dejan de ser comparables sin que se note. Guardarlo es lo
+    -- que permite detectarlo.
+    scoring_system TEXT,
     UNIQUE (provider, external_id)
 );
 

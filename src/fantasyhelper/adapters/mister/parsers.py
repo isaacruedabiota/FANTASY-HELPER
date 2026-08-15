@@ -272,6 +272,8 @@ class MisterUser:
     league_external_id: str | None = None
     league_name: str | None = None
     formation: str | None = None
+    #: Sistema de puntuacion de la liga: 'mix2', 'mr', 'as', 'marca'...
+    scoring_system: str | None = None
     #: Otras ligas del usuario: {id: nombre}.
     other_leagues: dict[str, str] = field(default_factory=dict)
 
@@ -307,6 +309,9 @@ def parse_user_config(html: bytes | str) -> MisterUser | None:
         league_external_id=_str_or_none(data.get("id_community")),
         league_name=data.get("community"),
         formation=data.get("formation"),
+        # 'provider' en la configuracion del usuario es el sistema de
+        # puntuacion de la liga activa, no el proveedor de datos.
+        scoring_system=_str_or_none(data.get("provider")),
         other_leagues=other,
     )
 

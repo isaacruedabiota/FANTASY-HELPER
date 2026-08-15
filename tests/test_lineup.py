@@ -602,6 +602,35 @@ def test_la_pantalla_del_once_se_pinta_entera(db, liga, monkeypatch, tmp_path):
     assert "A quién poner" in respuesta.text
 
 
+def test_el_sistema_de_puntuacion_se_guarda_y_se_traduce(db, liga):
+    repo.record_scoring_system(db, league_id=liga["league_id"], system="mix2")
+
+    codigo, nombre, detalle = queries.scoring_system(db)
+    assert codigo == "mix2"
+    assert nombre == "Mixto 2"
+    assert "SofaScore al 50%" in detalle
+
+
+def test_un_cambio_de_sistema_se_denuncia(db, liga):
+    """Cambiarlo hace que las medias de antes y las de despues no se puedan
+    comparar, y el modelo las mezclaria sin enterarse."""
+    assert repo.record_scoring_system(
+        db, league_id=liga["league_id"], system="mix2") is None
+    assert repo.record_scoring_system(
+        db, league_id=liga["league_id"], system="mix2") is None, "sin cambio, callado"
+
+    anterior = repo.record_scoring_system(
+        db, league_id=liga["league_id"], system="mr")
+    assert anterior == "mix2"
+    assert queries.scoring_system(db)[0] == "mr"
+
+
+def test_sin_sistema_conocido_no_se_inventa_uno(db, liga):
+    codigo, nombre, _ = queries.scoring_system(db)
+    assert codigo is None
+    assert nombre == "desconocido"
+
+
 def test_la_formacion_propia_se_guarda_y_se_lee(db, liga):
     repo.record_manager_formation(db, manager_id=liga["yo"], formation="4-4-2")
     assert queries.my_manager(db)["formation"] == "4-4-2"

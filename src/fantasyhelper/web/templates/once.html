@@ -96,7 +96,10 @@
   depende de a quién pongas. Lo único que te juegas al alinear son los puntos de
   la jornada.
   <br><br>
-  <strong>Cada cifra es lo que se espera de ese jugador esta jornada</strong>: su
+  <strong>Cada cifra es lo que se espera de ese jugador esta jornada</strong>, en
+  puntos del sistema de tu liga —
+  {%- if sistema[0] %} <strong>{{ sistema[1] }}</strong>, {{ sistema[2] }}
+  {%- else %} el que tenga configurado{% endif %} —: su
   media, ajustada por el rival y por dónde se juega, y multiplicada por la
   probabilidad de que sea titular. Un 40% de probabilidad ya viene descontado en
   el número, pero eso no lo hace seguro — de ahí los avisos.

@@ -205,6 +205,9 @@ def once(request: Request):
                 "aplazado": round((1 - lineup.POSTPONED_DISCOUNT) * 100),
                 "minutos": round((1 - xpts.RETURNING_MINUTES) * 100),
             },
+            # Los puntos tienen unidad, y conviene que se lea en la pantalla que
+            # los ensena: no es lo mismo un 3,8 de Mixto 2 que uno de SofaScore.
+            sistema=queries.scoring_system(conn),
             **datos,
         )
     finally:
@@ -320,6 +323,7 @@ def liga(request: Request):
             # lado invita a creersela mas de lo que toca.
             error_estimacion=queries.estimation_error(conn),
             reglas=load_rules(conn),
+            sistema=queries.scoring_system(conn),
             # Todos, sin tope. El feed crece unas pocas tarjetas al dia y
             # cortarlo escondia justo lo que se busca al mirarlo.
             movimientos=queries.movements(conn),

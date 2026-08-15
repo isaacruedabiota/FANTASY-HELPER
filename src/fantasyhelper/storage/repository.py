@@ -173,6 +173,40 @@ def upsert_league(
     ).fetchone()["id"]
 
 
+def record_scoring_system(
+    conn: sqlite3.Connection, *, league_id: int, system: str | None
+) -> str | None:
+    """Guarda el sistema de puntuacion y avisa si ha cambiado.
+
+    No es un dato decorativo. TODO el historico de puntos que guardamos viene en
+    el sistema que la liga tenga puesto -Mister recalcula las medias segun el
+    ajuste-, asi que si el administrador lo cambia a mitad de temporada las
+    medias de antes y las de despues dejan de ser comparables. El modelo las
+    mezclaria sin enterarse.
+
+    Devuelve el sistema ANTERIOR cuando ha cambiado, y None cuando no. Quien
+    llama decide que hacer con ello; aqui solo se deja constancia.
+    """
+    if not system:
+        return None
+
+    fila = conn.execute(
+        "SELECT scoring_system FROM league WHERE id = ?", (league_id,)
+    ).fetchone()
+    anterior = fila["scoring_system"] if fila else None
+    conn.execute(
+        "UPDATE league SET scoring_system = ? WHERE id = ?", (system, league_id)
+    )
+    if anterior and anterior != system:
+        log.warning(
+            "la liga ha cambiado el sistema de puntuacion de '%s' a '%s': "
+            "las medias historicas ya no son comparables con las nuevas",
+            anterior, system,
+        )
+        return anterior
+    return None
+
+
 def upsert_manager(
     conn: sqlite3.Connection,
     *,

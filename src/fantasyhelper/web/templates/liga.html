@@ -86,6 +86,34 @@
 </section>
 
 <section>
+  <h2>Cómo se puntúa</h2>
+  <p class="sub">De qué sistema salen los puntos con los que trabaja todo el sitio.</p>
+  <div class="tabla-scroll">
+    <table>
+      <tbody>
+        <tr>
+          <td>Sistema</td>
+          <td><strong>{{ sistema[1] }}</strong>{% if sistema[0] %} <span class="meta">({{ sistema[0] }})</span>{% endif %}</td>
+        </tr>
+        {% if sistema[2] %}<tr><td>Qué es</td><td>{{ sistema[2] }}</td></tr>{% endif %}
+      </tbody>
+    </table>
+  </div>
+  <p class="nota">
+    Es la <strong>unidad</strong> de todo lo que calcula el modelo, no un dato de
+    adorno. Mister nos entrega el histórico ya en este sistema, porque se captura
+    con tu sesión dentro de la liga: sobre 36 jugadores, sus totales de la
+    temporada pasada coinciden con los que publica FutbolFantasy para este mismo
+    sistema — treinta de ellos <em>al punto exacto</em>.
+    <br><br>
+    Con SofaScore a secas el orden de los jugadores se movía hasta diez puestos,
+    así que la distinción no es cosmética. Si el administrador cambiara el
+    sistema, las medias de antes y las de después dejarían de ser comparables;
+    por eso se guarda y queda un aviso en el registro cuando cambia.
+  </p>
+</section>
+
+<section>
   <h2>Bonificaciones</h2>
   <p class="sub">Transcritas de la pantalla de ajustes; no hay forma de leerlas por API.</p>
   <div class="tabla-scroll">

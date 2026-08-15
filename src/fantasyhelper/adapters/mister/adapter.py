@@ -727,6 +727,14 @@ class MisterAdapter:
             season=settings.season,
         )
 
+        # El sistema de puntuacion de la liga. Todo el historico que guardamos
+        # viene en el que este puesto, asi que un cambio silencioso rompe la
+        # comparacion entre lo de antes y lo de despues.
+        if self.user:
+            repo.record_scoring_system(
+                conn, league_id=league_id, system=self.user.scoring_system
+            )
+
         # El saldo propio va al mismo sitio que el del resto de participantes,
         # aunque de los demas quede siempre a NULL.
         if self.user and self.user.balance is not None:
