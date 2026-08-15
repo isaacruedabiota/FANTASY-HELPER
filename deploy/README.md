@@ -98,6 +98,22 @@ Ya pasó: se arregló que un nombre de equipo bueno no se degradara al slug de
 FutbolFantasy, se reinició la web, y a las 03:30 la captura volvió a dejar
 `RAYO-VALLECANO` en pantalla — con el arreglo ya en el disco desde hacía seis horas.
 
+## El pasado de los fichajes de fuera
+
+Mister solo conoce LaLiga, así que de un jugador llegado de otra liga no publica
+ni una temporada. `fh sofascore` va a buscarlo:
+
+```bash
+.venv/bin/fh sofascore              # solo los que aún no tienen notas
+.venv/bin/fh sofascore --limite 20  # una muestra, para probar
+.venv/bin/fh sofascore --rehacer    # repasa también los ya emparejados
+```
+
+No va en la captura periódica a propósito: son ~9 peticiones por jugador y las
+temporadas cerradas no cambian nunca. Con el catálogo entero tarda cerca de
+media hora, así que conviene lanzarlo con `setsid ... &` y mirar el log después.
+Se ejecuta cuando entran fichajes nuevos, no a diario.
+
 ## Consultar desde tu ordenador
 
 La base de datos es un único fichero. Para mirar los datos sin entrar por SSH:

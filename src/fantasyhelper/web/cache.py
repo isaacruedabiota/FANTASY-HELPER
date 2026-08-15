@@ -49,11 +49,20 @@ def data_fingerprint(conn: sqlite3.Connection) -> tuple:
     equipos = conn.execute(
         "SELECT COUNT(*) AS filas, MAX(name) AS ultimo FROM team"
     ).fetchone()
+    # El historico por temporada. No lo toca la captura periodica -Mister no
+    # reescribe el pasado- pero si `fh sofascore`, que trae el de los fichajes
+    # llegados de fuera y cambia la media base de mas de cien jugadores. Sin
+    # mirarlo, la web seguiria sirviendo el modelo anterior hasta la siguiente
+    # captura: el mismo fallo que ya paso con los nombres de equipo.
+    historico = conn.execute(
+        "SELECT COUNT(*) AS filas, MAX(updated_at) AS tocado FROM player_season_stat"
+    ).fetchone()
 
     return (
         valores["ultima"], valores["filas"],
         calendario["filas"], calendario["tocado"],
         equipos["filas"], equipos["ultimo"],
+        historico["filas"], historico["tocado"],
     )
 
 

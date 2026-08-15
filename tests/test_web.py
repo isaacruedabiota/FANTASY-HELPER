@@ -215,3 +215,14 @@ def test_un_reproceso_invalida_la_cache_aunque_no_toque_los_valores(db):
     repo.record_schedule(db, season="2026-27", matchday=1, team_id=equipo,
                          opponent_id=rival)
     assert data_fingerprint(db) != entre, "un calendario nuevo tambien"
+
+    # `fh sofascore` no escribe ni un valor de mercado y aun asi cambia la media
+    # base de mas de cien jugadores. Sin esto la web serviria el modelo viejo
+    # hasta la siguiente captura.
+    antes_notas = data_fingerprint(db)
+    jugador = repo.resolve_player(db, provider="mister", external_id="7",
+                                  name="Fichaje", team_id=equipo)
+    repo.record_season_stat(db, provider="sofascore", player_id=jugador,
+                            season="2024-25", points=140, avg_points=4.0,
+                            matches_played=35)
+    assert data_fingerprint(db) != antes_notas, "el historico de notas tambien"
